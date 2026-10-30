@@ -1,0 +1,11 @@
+{
+  "name": "fx-autobattle",
+  "private": true,
+  "description": "為替×オートバトル（ブラウザゲーム）",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "fetch-rates": "node tools/fetch-rates.js",
+    "test": "node tools/test-core.js && node tools/test-battle.js && node tools/test-game.js"
+  }
+}
