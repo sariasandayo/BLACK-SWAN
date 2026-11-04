@@ -17,7 +17,7 @@
 [hidden] { display: none !important; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 body { font: 14px/1.5 ui-monospace, Consolas, "BIZ UDGothic", "MS Gothic", monospace; -webkit-text-size-adjust: 100%; }
-#app { max-width: 560px; margin: 0 auto; padding: 0 12px 84px; }
+#app { max-width: 560px; margin: 0 auto; padding: 0 12px 96px; }
 
 /* 共通 */
 section { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin: 10px 0; }
@@ -50,6 +50,9 @@ label { color: var(--muted); font-size: 12px; }
 canvas { width: 100%; display: block; }
 pre { margin: 0; font: inherit; font-size: 12px; white-space: pre-wrap; }
 
+/* ゲーム画面の最上部の作品名（スクロールで流れる。上部の情報バーはこれまでどおり追従する） */
+.game-title { padding: 8px 0 0; font-size: 11px; letter-spacing: .3em; color: var(--accent); opacity: .8; text-align: center; }
+
 /* 上部の情報バー */
 .topbar.static { position: static; }
 .topbar { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); padding: 8px 0 6px; }
@@ -58,14 +61,29 @@ pre { margin: 0; font: inherit; font-size: 12px; white-space: pre-wrap; }
 .topbar .stats b { color: var(--text); font-weight: normal; }
 
 /* タイトル画面：画面の真ん中に寄せる */
-.title-screen { min-height: 100vh; min-height: 100dvh; margin-bottom: -84px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 4px; padding: 24px 0; }
+.title-screen { min-height: 100vh; min-height: 100dvh; margin-bottom: -96px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 4px; padding: 24px 0; }
 .title-screen h1 { font-size: 28px; letter-spacing: .12em; margin: 0 0 12px; }
 .title-screen .row { justify-content: center; }
 .title-screen .toast, .title-screen section { text-align: left; }
+.title-screen .loading { width: min(260px, 80%); }
+.title-screen .loading .bar { height: 3px; }
+.title-screen .loading .bar > div { transition: width .2s; }
+/* タイトル画面のボタン：マウスを乗せると少し明るくなる（タッチ端末では押したあとに残らないよう、マウスのときだけ） */
+.title-screen button { transition: background-color .15s, border-color .15s, color .15s, box-shadow .15s; }
+.title-screen button:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+@media (hover: hover) {
+  .title-screen button:hover:not(:disabled) { background: #16211a; border-color: var(--muted); color: #e6f5ea; }
+  .title-screen button.go:hover:not(:disabled) { background: rgba(232, 197, 71, .12); border-color: #f3d872; color: #f3d872; box-shadow: 0 0 10px rgba(232, 197, 71, .25); }
+  .title-screen button.link:hover:not(:disabled) { background: none; box-shadow: none; color: var(--text); text-decoration-color: var(--muted); }
+}
+/* 設定資料集・免責事項：枠のない文字だけのボタン（始める・続きからより目立たない） */
+.title-screen .title-sub { margin-top: 18px; gap: 20px; }
+button.link { background: none; border: none; border-radius: 0; padding: 4px 2px; font-size: 12px; color: var(--muted); text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 4px; }
+button.link:active { background: none; color: var(--text); }
 
 /* 下部のタブ */
 .tabs { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5; background: var(--panel2); border-top: 1px solid var(--line2); display: flex; justify-content: center; }
-.tabs button { flex: 1; max-width: 140px; border: none; border-radius: 0; background: none; padding: 12px 4px; color: var(--muted); }
+.tabs button { flex: 1; max-width: 140px; min-height: 56px; border: none; border-radius: 0; background: none; padding: 16px 4px calc(16px + env(safe-area-inset-bottom)); color: var(--muted); font-size: 15px; }
 .tabs button.on { color: var(--accent); box-shadow: inset 0 2px 0 var(--accent); }
 
 /* お知らせ */
@@ -94,6 +112,10 @@ pre { margin: 0; font: inherit; font-size: 12px; white-space: pre-wrap; }
 .card { border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; margin: 8px 0; background: var(--panel2); }
 .card .title { display: flex; justify-content: space-between; gap: 8px; }
 .tag { display: inline-block; font-size: 11px; padding: 0 6px; border: 1px solid var(--line2); border-radius: 3px; color: var(--muted); margin-right: 4px; }
+.tag.here { background: var(--accent); border-color: var(--accent); color: #111; font-weight: bold; font-size: 12px; }
+.card.here { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.mtitle { font-size: 15px; color: var(--text); }
+.tag.days { border-color: var(--blue); color: var(--blue); font-size: 13px; font-weight: bold; padding: 1px 8px; }
 
 /* 戦闘 */
 .field { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 5px; }
@@ -150,7 +172,7 @@ button.tip { display: inline-flex; align-items: center; justify-content: center;
 .story-rewind.end .story-date { color: var(--text); text-shadow: 0 0 12px rgba(207, 232, 213, .6); animation: none; }
 @keyframes jitter { 50% { transform: translate(1px, -1px); } }
 .story-stage { position: absolute; left: 50%; bottom: var(--tabs-h, 0px); transform: translateX(-50%); width: min(560px, 100%); padding: 0 8px max(10px, env(safe-area-inset-bottom)); }
-.story-face { position: absolute; right: 16px; bottom: calc(100% - 14px); height: clamp(150px, 30vh, 260px); width: auto; filter: drop-shadow(0 4px 10px rgba(0, 0, 0, .6)); pointer-events: none; }
+.story-face { position: absolute; right: 16px; bottom: calc(100% - 14px); height: clamp(110px, 22vh, 190px); width: auto; filter: drop-shadow(0 4px 10px rgba(0, 0, 0, .6)); pointer-events: none; }
 .story-box { position: relative; min-height: 132px; max-height: 72vh; overflow: auto; background: rgba(10, 14, 11, .93); border: 1px solid var(--line2); border-top: 2px solid var(--accent); border-radius: 8px; padding: 8px 14px 22px; box-shadow: 0 -6px 24px rgba(0, 0, 0, .55); }
 .story-box.who-system { border-top-color: var(--blue); }
 .story-box.who-system .story-name { color: var(--blue); }
@@ -167,3 +189,87 @@ button.tip { display: inline-flex; align-items: center; justify-content: center;
 .story-next { position: absolute; right: 12px; bottom: 4px; font-size: 11px; color: var(--accent); opacity: 0; }
 .story-next.on { animation: blink 1s infinite; }
 @keyframes blink { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
+
+/* 会話のログ（すべて止めて、これまでの台詞を出す） */
+.story-log { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; background: rgba(4, 6, 5, .94); cursor: default; }
+.story-log-head { display: flex; align-items: center; justify-content: space-between; width: min(560px, 100%); margin: 0 auto; padding: 12px 16px; color: var(--accent); letter-spacing: .1em; border-bottom: 1px solid var(--line2); }
+.story-log-body { flex: 1; overflow-y: auto; width: min(560px, 100%); margin: 0 auto; padding: 8px 16px 24px; user-select: text; }
+.log-line { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.log-name { font-size: 12px; color: var(--accent); letter-spacing: .1em; }
+.log-line.who-system .log-name { color: var(--blue); }
+.log-text { font-size: 14px; line-height: 1.8; }
+.log-text rt { font-size: .55em; color: var(--muted); }
+
+/* 仲間の札：左に立ち絵（こよみ）か役割のアイコン */
+.card.member { display: flex; gap: 10px; align-items: flex-start; }
+.member-avatar { flex: none; width: 48px; display: flex; justify-content: center; padding-top: 2px; }
+.member-body { flex: 1; min-width: 0; }
+.member-face { width: 64px; height: auto; margin-left: -6px; border-radius: 6px; background: radial-gradient(circle at 50% 40%, #27332b, #121915); border: 1px solid var(--line2); }
+.card.member:has(.member-face) .member-avatar { width: 64px; }
+.role-icon { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; border: 1.5px solid currentColor; background: rgba(255, 255, 255, .04); }
+/* 役割の名前（町・部隊で同じ） */
+.role-name { display: inline-block; font-size: 12px; font-weight: bold; padding: 0 6px; border: 1px solid currentColor; border-radius: 3px; }
+.role-hero { color: var(--accent); }
+.role-shooter { color: #ff9f5f; }
+.role-tank { color: var(--blue); }
+.role-medic { color: var(--up); }
+.role-scout { color: #c59cff; }
+
+/* 移動の演出（地図の上をちびキャラが歩く） */
+.travel { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; background: rgba(4, 6, 5, .88); cursor: pointer; }
+.travel-panel { width: min(560px, 100%); padding: 0 12px; }
+.travel-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; color: var(--accent); }
+.travel-day { color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
+.travel-map { overflow: visible; margin-top: 52px; } /* ちびキャラが見出しに重ならないよう、上を空ける */
+.travel-route { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.travel-route line { stroke: var(--accent); stroke-width: 1.5px; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; opacity: .7; }
+.travel-pin { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--muted); }
+.travel-pin.to { background: var(--accent); box-shadow: 0 0 0 4px rgba(232, 197, 71, .25); }
+.travel-chibi { position: absolute; height: 56px; width: auto; transform: translate(-50%, -92%); animation: hop .32s ease-in-out infinite alternate; filter: drop-shadow(0 3px 4px rgba(0, 0, 0, .6)); pointer-events: none; }
+@keyframes hop { to { translate: 0 -5px; } }
+.travel-skip { text-align: center; margin-top: 10px; }
+
+/* エンド画面の下のスチル */
+.end-still { padding: 0; overflow: hidden; }
+.end-still img { display: block; width: 100%; height: auto; }
+
+/* FX口座：チャートの注記（目立たせない）と、用語・考え方の折りたたみ */
+.chart-note { margin: 4px 0 0; font-size: 10px; color: var(--muted); opacity: .75; text-align: right; }
+.guide details { border-top: 1px solid var(--line); padding: 6px 0; }
+.guide summary { cursor: pointer; color: var(--text); padding: 4px 0; }
+.guide summary::marker { color: var(--accent); }
+.guide dl { margin: 6px 0 0; font-size: 12px; line-height: 1.7; }
+.guide dt { color: var(--accent); margin-top: 8px; }
+.guide dd { margin: 0 0 0 1em; }
+.guide ul { margin: 6px 0 0; padding-left: 1.2em; font-size: 12px; line-height: 1.7; }
+.guide li { margin: 6px 0; }
+.guide li b { color: var(--accent); font-weight: normal; }
+
+/* こよみの反応（画面の下、タブの上に一言） */
+.reaction { position: fixed; left: 50%; bottom: calc(var(--tabs-h, 0px) + 8px); z-index: 70; width: min(560px, 100%); padding: 0 8px; transform: translate(-50%, 8px); opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none; }
+.reaction.on { opacity: 1; transform: translate(-50%, 0); }
+.reaction-inner { position: relative; pointer-events: auto; cursor: pointer; }
+.reaction-box { background: rgba(10, 14, 11, .95); border: 1px solid var(--line2); border-top: 2px solid var(--accent); border-radius: 8px; padding: 6px 104px 8px 14px; min-height: 56px; box-shadow: 0 -4px 18px rgba(0, 0, 0, .5); }
+.reaction-name { color: var(--accent); font-size: 12px; letter-spacing: .1em; }
+.reaction-text { font-size: 15px; line-height: 1.6; }
+.reaction-face { position: absolute; right: 12px; bottom: 0; height: 104px; width: auto; filter: drop-shadow(0 3px 8px rgba(0, 0, 0, .6)); }
+
+/* 設定資料集・免責事項（タイトル画面から全画面に重ねて開く） */
+.lore { position: fixed; inset: 0; z-index: 95; display: flex; flex-direction: column; background: rgba(4, 6, 5, .97); }
+.lore-head { display: flex; align-items: center; justify-content: space-between; width: min(560px, 100%); margin: 0 auto; padding: 12px 16px; color: var(--accent); letter-spacing: .1em; border-bottom: 1px solid var(--line2); }
+.lore-body { flex: 1; overflow-y: auto; width: min(560px, 100%); margin: 0 auto; padding: 4px 16px 32px; }
+.lore-body h2 { margin: 18px 0 4px; }
+.lore-body details { border-bottom: 1px solid var(--line); padding: 8px 0; }
+.lore-body summary { cursor: pointer; color: var(--text); font-size: 15px; }
+.lore-body summary::marker { color: var(--accent); }
+.lore-body p { font-size: 13px; line-height: 1.85; margin: 8px 0 0; color: #d9e9de; }
+.lore-body .disclaimer { padding-top: 8px; }
+.lore-body .disclaimer p { margin: 14px 0 0; line-height: 1.95; }
+@media (hover: hover) {
+  .lore-head button { transition: border-color .15s, color .15s; }
+  .lore-head button:hover { border-color: var(--muted); color: #e6f5ea; }
+}
+
+/* 値動きの再生と並べて出す移動の地図 */
+.pass-travel .travel-head { margin-bottom: 0; font-size: 13px; }
+.pass-travel .travel-map { margin-top: 44px; }

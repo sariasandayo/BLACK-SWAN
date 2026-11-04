@@ -21,20 +21,31 @@ export function setupCanvas(canvas) {
   return { g, w, h };
 }
 
-// 直近の終値のチャート
-export function drawHistory(canvas, market, ccy, date, count = 90) {
+// 直近の終値のチャート。営業日ごとに点と日付を付け、その間を日中の値動きで結ぶ
+//   日中の値動きは market.intradayPath（出撃中・移動中の表示や、損切り・利確の判定と同じもの）。
+//   同じ日の同じ時刻は、どの画面でも同じ値になる。終値（点）は実際の値
+export function drawHistory(canvas, market, ccy, date, count = 7) {
   const { g, w, h } = setupCanvas(canvas);
   const hist = market.history(ccy, date, count);
   if (hist.length < 2) return;
-  const vals = hist.map((x) => x.close);
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
+  const closes = hist.map((x) => x.close);
+  // 日中の点：日 k（1以上）の値動きは、横軸 k-1 → k の間に置く（始まりは前の営業日の終値）
+  const pts = [{ t: 0, v: closes[0] }];
+  for (let k = 1; k < hist.length; k++) {
+    const path = market.intradayPath(ccy, hist[k].date);
+    const n = path.length - 1;
+    for (let s = 1; s <= n; s++) pts.push({ t: k - 1 + s / n, v: path[s] });
+  }
+  const all = pts.map((p) => p.v);
+  const min = Math.min(...all);
+  const max = Math.max(...all);
   const pad = (max - min) * 0.08 || 1;
   const lo = min - pad;
   const hi = max + pad;
   const plotW = w - 48;
-  const x = (i) => (i / (hist.length - 1)) * plotW;
-  const y = (v) => h - 6 - ((v - lo) / (hi - lo)) * (h - 12);
+  const bottom = 16; // 日付の欄
+  const x = (t) => 20 + (t / (hist.length - 1)) * (plotW - 34);
+  const y = (v) => h - bottom - 6 - ((v - lo) / (hi - lo)) * (h - bottom - 12);
 
   g.strokeStyle = COLORS.grid;
   g.fillStyle = COLORS.label;
@@ -46,11 +57,34 @@ export function drawHistory(canvas, market, ccy, date, count = 90) {
     g.stroke();
     g.fillText(v.toFixed(hi - lo < 1 ? 3 : 2), plotW + 4, y(v) + 4);
   }
-  g.strokeStyle = vals[vals.length - 1] >= vals[0] ? COLORS.up : COLORS.down;
-  g.lineWidth = 1.5;
+  // 日の区切り
+  g.strokeStyle = "rgba(109,135,117,.18)";
+  for (let k = 0; k < hist.length; k++) {
+    g.beginPath();
+    g.moveTo(x(k), 4);
+    g.lineTo(x(k), h - bottom - 2);
+    g.stroke();
+  }
+  const color = closes[closes.length - 1] >= closes[0] ? COLORS.up : COLORS.down;
+  g.strokeStyle = color;
+  g.lineWidth = 1.2;
   g.beginPath();
-  vals.forEach((v, i) => (i ? g.lineTo(x(i), y(v)) : g.moveTo(x(i), y(v))));
+  pts.forEach((p, i) => (i ? g.lineTo(x(p.t), y(p.v)) : g.moveTo(x(p.t), y(p.v))));
   g.stroke();
+  // 終値の点と日付
+  g.fillStyle = color;
+  closes.forEach((v, i) => {
+    g.beginPath();
+    g.arc(x(i), y(v), 3, 0, Math.PI * 2);
+    g.fill();
+  });
+  g.fillStyle = COLORS.label;
+  g.textAlign = "center";
+  hist.forEach((p, i) => {
+    const [, m, d] = p.date.split("-").map(Number);
+    g.fillText(`${m}/${d}`, x(i), h - 3);
+  });
+  g.textAlign = "start";
 }
 
 // 出撃中・時の流れのチャート：出発からいまのコマまで。

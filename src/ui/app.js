@@ -6,11 +6,17 @@
 
 import { CONFIG } from "../config.js";
 import { Game, describeEvent, countTypes, yen, signedYen } from "../game/game.js";
+import { maxLeverage } from "../core/fx-account.js";
 import { formatJa, daysBetween, addDays } from "../core/calendar.js";
 import { drawHistory, drawSortie, drawAnswerChart } from "./charts.js";
 import { loadLandPath, mapPosition } from "./worldmap.js";
 import { playStory, storyPlaying } from "./story.js";
-import { STORY, ENDING_STORY } from "../data/story.js";
+import { STORY, ENDING_STORY, STILLS } from "../data/story.js";
+import { preloadImages } from "./assets.js";
+import { roleIcon } from "./icons.js";
+import { react, hideReaction } from "./reaction.js";
+import { loreEntries } from "../data/lore.js";
+import { setupOffline } from "./offline.js";
 
 const $ = (id) => document.getElementById(id);
 const app = $("app");
@@ -91,6 +97,13 @@ function giftText(gift) {
   return Object.entries(gift).map(([k, n]) => `${itemName(k)}${n}`).join("・");
 }
 
+// 観測レンズの補正の文（例：売却額+10%・位相残晶+15%）。補正がなければ「補正なし」
+function lensBonusText(level) {
+  const l = level ? CONFIG.lens[level - 1] : null;
+  if (!l?.rewardBonus && !l?.featherBonus) return "補正なし";
+  return `売却額+${pct(l.rewardBonus ?? 0)}・位相残晶+${pct(l.featherBonus ?? 0)}`;
+}
+
 // ───────── ヒント（ⓘを押すと出る説明） ─────────
 // 常に出しておく説明は最小限にして、必要なときだけ読めるようにする
 
@@ -103,6 +116,7 @@ const TIPS = {
     ・敵のLvは日が経つほど上がる（いまLv${game.baseEnemyLevel()}前後、ドゥームズデイにはLv${1 + CONFIG.levels.mission.perRun}前後）。規模が大きいほど高く、売却額も大きい<br>
     ・偵察すると敵の編成が分かり、最初の戦闘で奇襲できる（攻撃力+${pct(CONFIG.battle.ambushBonus)}）。その都市の通貨の噂も聞ける<br>
     ・倒すと位相残晶が手に入る（対抗装置・観測レンズの素材）<br>
+    ・観測レンズを強化すると、売却額と位相残晶が増える（いま：${lensBonusText(game.lensLevel)}）<br>
     ・ドゥームズデイまでに東京へ戻れない探索には出られない`,
   counters: () => {
     const c = counterText();
@@ -113,11 +127,13 @@ const TIPS = {
     後列：装甲型・再生型には狙われにくい（前列が全員倒れるか退くまで）。<br>
     群体型は前列・後列を問わず狙い（盾役は半分ほど引きつける）、位相型は弱っている仲間を狙う（盾役でも引きつけられない）。<br>
     ショットガンなど前列専用、スナイパーなど後列専用の銃がある。持ち替えると、その列へ移る。買った銃は「部隊」で持ち替える。`,
-  hire: () => `候補は${game.daysUntilRefresh()}日後に入れ替わる。候補のLvは部隊の平均くらい。日給は雇った都市の通貨で毎日払い、Lvが上がると高くなる。日給を払えない日が${CONFIG.party.wageGraceDays}日続くと去る。`,
-  party: () => `出撃するのは「編成」に入れた${CONFIG.party.maxMembers}人まで（${HERO}は必須）。編成外の仲間も日給はかかり、訓練はできる。`,
+  hire: () => `候補は${game.daysUntilRefresh()}日後に入れ替わる。候補のLvは部隊の平均くらい。日給は雇った都市の通貨で毎日払い、Lvが上がると高くなる。日給を払えない日が${CONFIG.party.wageGraceDays}日続くと去る。<br>
+    解雇するときは、日給の${CONFIG.party.severanceDays}日分の退職金を払う（持っていた銃は予備に残る）。`,
+  party: () => `出撃するのは「編成」に入れた${CONFIG.party.maxMembers}人まで（${HERO}は必須）。編成外の仲間も日給はかかり、訓練はできる。解雇には日給の${CONFIG.party.severanceDays}日分の退職金がかかる。`,
   training: () => {
     const tr = CONFIG.party.training;
-    return `訓練でLvが上がる（最大${CONFIG.levels.member.maxLevel}）。体力・命中・回避・撃つ速さが上がる（攻撃力は銃のLvで決まる）。町で過ごす日に、1日 ${yen(game.yenCost(tr.fee))}×Lvで、${tr.daysPerLevel}日で1上がる。出撃した仲間も、1日あたり${tr.sortieXp}日分鍛えられる。`;
+    return `訓練でLvが上がる（最大${CONFIG.levels.member.maxLevel}）。体力・命中・回避・撃つ速さが上がる（攻撃力は銃のLvで決まる）。町で過ごす日に、1日 ${yen(game.yenCost(tr.fee))}×Lvで、${tr.daysPerLevel}日で1上がる。出撃した仲間も、出撃${Math.round(1 / tr.sortieXp)}日で訓練1日分鍛えられる（お金はかからない）。<br>
+      お金が足りない日は、払えない仲間の訓練は進まない。訓練・偵察・情報収集・決戦に進む前に、訓練費と日給の見込みを出す。`;
   },
   weaponUp: () => `銃は種類ごとにLvを上げる（最大${CONFIG.levels.weapon.maxLevel}）。同じ種類の銃はすべて同じLv。1つ上げるごとに攻撃力が${Math.round((CONFIG.levels.allyGrowth - 1) * 100)}%上がる。`,
   retreat: () => `撤退ラインは仲間ごと。体力がラインを下回った仲間は、すぐに戦闘から退く。退いた仲間は死なない。<br>
@@ -131,29 +147,34 @@ const TIPS = {
       ${kinds.map((d) => `・${d.name}：${d.desc}${d.lens ? `（観測レンズ${d.lens + 1}段階目から）` : ""}${d.lens <= game.lensLevel ? "" : '<span class="muted">　未観測</span>'}`).join("<br>")}<br>
       一部を除き、特異な残滓からは位相残晶は手に入らない。`;
   },
-  lens: () => `${HERO}の観測レンズを強化すると、観測できる特異な残滓の種類が増え、レンズでしか見えない残滓も現れるようになる（${lensStages}段階）。強化は東京でだけでき、お金のほかに位相残晶を少し使う（${CONFIG.lens.map((l) => l.feathers).join("・")}個）。`,
+  lens: () => `${HERO}の観測レンズを強化すると、観測できる特異な残滓の種類が増え、レンズでしか見えない残滓も現れるようになる（${lensStages}段階）。<br>
+    さらに、すべての探索（特異な残滓も）で、回収品の売却額と、拾う位相残晶が増える（${CONFIG.lens.map((l, i) => `${i + 2}段階目：${lensBonusText(i + 1)}`).join("、")}）。<br>
+    偵察で聞く噂の確からしさも上がる（${pct(CONFIG.hints.scout.accuracy)}→${CONFIG.lens.map((l) => pct(l.scoutAccuracy ?? CONFIG.hints.scout.accuracy)).join("→")}）。<br>
+    強化は東京でだけでき、お金のほかに位相残晶を少し使う（${CONFIG.lens.map((l) => l.feathers).join("・")}個）。`,
   map: () => `${travelText()}移動中も取引はできる。`,
   lab: () => {
     const eg = CONFIG.endgame;
+    const rate = eg.feathers.perDay[1] * (1 + game.lensBonus().feathers);
     return `対抗装置は東京の研究室で作る。位相残晶とお金を持ち帰って頼むと、その場で完成する。建造した装置は、ブラックスワン以外との戦闘でもわずかに効く。<br>
-      位相残晶：探索で残滓を倒すと手に入る。日数の${pct(eg.feathers.perDay[1])}は必ず、さらに1日ごとに${pct(eg.feathers.bonusChance)}の確率で1個増える。一部を除き、特異な残滓からは手に入らない。`;
+      位相残晶：探索で残滓を倒すと手に入る。日数の${pct(rate)}は必ず、さらに1日ごとに${pct(game.featherBonusChance())}の確率で1個増える（観測レンズの補正込み）。一部を除き、特異な残滓からは手に入らない。`;
   },
   intel: () => {
     const h = CONFIG.hints.tokyo;
-    return `${h.takeDays}日かけて、日銀・財務省筋から、円全体のこの先${h.days}日の向き（円高か円安か）の噂を集める（${pct(h.accuracy)}くらいの確からしさ）。新しい噂が入るのは週に1度。集めた噂は、FX口座の「手がかり」に出る。`;
+    return `${h.takeDays}日かけて、日銀・財務省筋から、この先${h.days}日で円に対して一番大きく動く通貨と、その向きの噂を集める（どの通貨かは確か。向きは${pct(h.accuracy)}くらいの確からしさ）。一度集めると、${h.cooldownDays}日たつまで新しい噂は入らない。集めた噂は、FX口座の「手がかり」に出る。`;
   },
   fxTrade: () => "取引は1日単位。訓練などで日を進めると、その日の終値で取引できる。損切り・利確は日の途中でも働く。出撃中・偵察中は取引できない。",
   fxAccount: () => `有効証拠金＝現金＋含み損益。証拠金維持率（有効証拠金÷必要証拠金）が${CONFIG.fx.losscutRatio * 100}%を下回ると、すべてのポジションが強制決済される（ロスカット）。<br>
     レバレッジはその時代の上限で固定。どれだけ危ないかは数量で決まり、「実効レバレッジ」（ポジションの金額の合計÷資金）で分かる。`,
   fxOrder: () => "損切り幅・利確幅は「建値から何円離すか」。リスクから数量を計算すると、損切りに届いたときに資金のその割合を失う数量が入る（数量はあとから変えてよい）。",
   memories: () => `記憶の断片：この期間に相場を動かした出来事を、近づくとときどき思い出す。思い出したことは確実に起こる。<br>
-    噂：偵察（${pct(CONFIG.hints.scout.accuracy)}）や東京の情報収集で、この先の向きが分かる。`,
+    噂：偵察（いまの観測レンズで${pct(game.scoutAccuracy())}）や東京の情報収集（${pct(CONFIG.hints.tokyo.accuracy)}）で、この先の向きが分かる。`,
   shares: () => {
     const eg = CONFIG.endgame;
     const sh = eg.shares;
     return `株式を買い集めると研究が遅れ、ブラックスワンのLvが、買った量の合計${eg.sharesPerBossLevel}%ごとに1下がる。<br>
       ${(sh.steps ?? []).map((s) => `${s.at}%を超えると${s.title}で値段が×${s.mult}`).join("、")}。売ることはできない。この期間に相場が大きく動いているほど、値段は高い。<br>
-      毎月1日に、株式に払った額の${(sh.dividendMonthly * 100).toFixed(1)}%が配当として届く。株主優待も同じ日に届く（${sh.perks.map((p) => `${p.at}%以上：造兵廠${pct(p.discount)}引き＋${giftText(p.gift)}`).join("／")}。銃の強化は割引にならない）。`;
+      研究が進むほど株価は上がる（ドゥームズデイには始めの×${(1 + (sh.priceGrowth ?? 0)).toFixed(1)}）。早く買うほど安い。<br>
+      毎月1日に、株式に払った額の${(sh.dividendMonthly * 100).toFixed(1)}%が配当として届く。株主優待も同じ日に届く（${sh.perks.map((p) => `${p.at}%以上：造兵廠${pct(p.discount)}引き＋${giftText(p.gift)}${p.weapon ? `、届いたときに試作品の「${CONFIG.weapons[p.weapon].name}」` : ""}`).join("／")}。銃の強化は割引にならない）。`;
   },
   boss: () => "決戦は撤退できない。全員が倒れれば敗北。形態と形態の間に、体力が少し回復する。取り巻きも同じLv。",
   declare: () => "決戦に進むと、FXのポジションをすべて決済し、ドゥームズデイまで日を進める（日給はかかり、訓練は進む）。当日、決戦の前に買い物と編成ができる。",
@@ -276,17 +297,58 @@ function fxCcyOf(city) {
   return city.currency === "JPY" ? "USD" : city.currency;
 }
 
+// タイトル画面から開く読み物（設定資料集・免責事項）。全画面に重ねて出し、「閉じる」で戻る
+const escText = (t) => t.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+function openLore() {
+  const body = loreEntries(CONFIG).map((g) => `<h2>${g.group}</h2>` + g.items.map((it) =>
+    `<details><summary>${escText(it.title)}</summary>${it.text.split("\n").map((p) => `<p>${escText(p)}</p>`).join("")}</details>`).join("")).join("");
+  openReading("設定資料集", body);
+}
+function openDisclaimer() {
+  openReading("免責事項", `<div class="disclaimer">${CONFIG.ui.disclaimer.map((p) => `<p>${escText(p)}</p>`).join("")}</div>`);
+}
+function openReading(title, body) {
+  const root = document.createElement("div");
+  root.className = "lore";
+  root.innerHTML = `<div class="lore-head"><span>${title}</span><button data-lore="close">閉じる</button></div><div class="lore-body">${body}</div>`;
+  root.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (e.target.closest('[data-lore="close"]')) root.remove();
+  });
+  document.body.appendChild(root);
+}
+
 // ───────── 起動 ─────────
 
+// 起動：相場データと画像（スチル・立ち絵など）を読み込むあいだ、読み込み中の画面を出す
 async function boot() {
-  try {
-    const res = await fetch(CONFIG.data.ratesUrl);
-    if (!res.ok) throw new Error(res.status);
-    data = await res.json();
-  } catch {
-    data = null;
-  }
+  const prog = { data: 0, img: 0, imgTotal: 1 };
+  const show = () => {
+    const pctDone = Math.round(((prog.data ? 1 : 0) + prog.img / Math.max(1, prog.imgTotal)) * 50);
+    app.innerHTML = `<div class="title-screen"><h1>${CONFIG.ui.gameTitle}</h1>
+      <div class="loading"><div class="bar"><div style="width:${pctDone}%"></div></div><p class="muted small">読み込み中… ${pctDone}%</p></div></div>`;
+  };
+  show();
+  const loadData = (async () => {
+    try {
+      const res = await fetch(CONFIG.data.ratesUrl);
+      if (!res.ok) throw new Error(res.status);
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    prog.data = 1;
+    show();
+  })();
+  const loadImages = preloadImages((n, total) => {
+    prog.img = n;
+    prog.imgTotal = total;
+    show();
+  });
+  await Promise.all([loadData, loadImages]);
   render();
+  // オフライン対応：読み込みが済んだファイルを、この端末に保存させる（src/ui/offline.js）
+  setupOffline();
   loadLandPath().then((path) => {
     landPath = path;
     if (ui.view === "main" && ui.tab === "map") render();
@@ -414,35 +476,52 @@ function tabs() {
 function titleButtons() {
   const save = readSave();
   const st = save?.game?.state;
-  if (!st) return '<div class="row"><button class="go" data-act="newRun">始める</button></div>';
+  // 設定資料集・免責事項は、始める・続きからより目立たない文字のボタンで、下に並べる
+  const lore = '<div class="row title-sub"><button class="link" data-act="openLore">設定資料集</button><button class="link" data-act="openDisclaimer">免責事項</button></div>';
+  if (!st) return `<div class="row"><button class="go" data-act="newRun">始める</button></div>${lore}`;
   const city = CONFIG.cities.find((c) => c.id === st.cityId)?.name ?? "";
   return `<div class="row"><button class="go" data-act="continueRun">続きから（${formatJa(st.date)}・${city}${save.pending ? "・出撃中" : ""}）</button></div>
     <div class="row"><button data-act="newRun">最初から始める</button></div>
-    <p class="muted small">最初から始めると、保存されているデータは消えます。</p>`;
+    <p class="muted small">最初から始めると、保存されているデータは消えます。</p>
+    ${lore}`;
 }
 
 function renderTitle() {
   if (!data) {
-    app.innerHTML = `<div class="title-screen"><h1>BLACK SWAN</h1>
+    app.innerHTML = `<div class="title-screen"><h1>${CONFIG.ui.gameTitle}</h1>
       <section><p class="warn">相場データ（${CONFIG.data.ratesUrl}）が見つかりません。</p></section></div>`;
     return;
   }
   app.innerHTML = `<div class="title-screen">
-    <h1>BLACK SWAN</h1>
+    <h1>${CONFIG.ui.gameTitle}</h1>
     ${titleButtons()}
     ${toastHtml()}</div>`;
 }
 
 function renderMain() {
   const body = { map: mapTab, town: townTab, party: partyTab, fx: fxTab, final: finalTab }[ui.tab]();
-  app.innerHTML = topbar(toastHtml() + warnings()) + body + tabs();
+  app.innerHTML = `<div class="game-title">${CONFIG.ui.gameTitle}</div>` + topbar(toastHtml() + warnings()) + body + tabs();
   if (ui.tab === "fx") {
-    drawHistory($("fxChart"), game.market, ui.fx.ccy, game.date);
+    drawHistory($("fxChart"), game.market, ui.fx.ccy, game.date, CONFIG.fx.historyDays);
     updateOrderPreview();
   }
 }
 
 // 訓練（日を進める）のボタン（町・移動中・FX口座の画面で共通）
+// 日を進める前に出す、出費の見込み（訓練費・日給）
+function upkeepNote(days, { training = true } = {}) {
+  const e = game.upkeepEstimate(days, { training });
+  const parts = [];
+  if (e.training > 0) parts.push(`訓練費 約${yen(e.training)}`);
+  if (e.wages > 0) parts.push(`日給 約${yen(e.wages)}`);
+  return parts.length ? `${days}日の出費の見込み：${parts.join("・")}` : "";
+}
+// ボタンに添える訓練費の見込み（訓練がないときは空）
+function trainingFeeLabel(days) {
+  const t = game.upkeepEstimate(days).training;
+  return t > 0 ? `・訓練費 約${yen(t)}` : "";
+}
+
 function waitButtons() {
   if (game.travel) {
     const left = daysBetween(game.date, game.travel.arrive);
@@ -452,7 +531,8 @@ function waitButtons() {
   const training = game.members.filter((m) => m.training && !game.isInjured(m));
   return `<div class="row"><label><input class="w" id="trainDays" type="number" min="1" max="${Math.max(1, game.daysLeft)}" step="1" value="${ui.trainDays}"> 日</label>
     <button data-act="wait">訓練する</button>
-    <span class="muted small">${training.length ? `訓練に出る仲間：${training.map((m) => m.name).join("、")}` : "訓練に出る仲間なし（日だけ進む）"}</span></div>`;
+    <span class="muted small">${training.length ? `訓練に出る仲間：${training.map((m) => m.name).join("、")}` : "訓練に出る仲間なし（日だけ進む）"}</span></div>
+    <p class="small" id="upkeepNote">${upkeepNote(Math.min(ui.trainDays, Math.max(1, game.daysLeft)))}</p>`;
 }
 
 // ───────── 地図 ─────────
@@ -470,8 +550,8 @@ function mapTab() {
     const days = game.travelDays(game.cityId, c.id);
     const here = c.id === game.cityId && !game.travel;
     const going = game.travel?.to === c.id;
-    return `<div class="card">
-      <div class="title"><span>${c.name}${here ? ' <span class="tag">現在地</span>' : ""}${going ? ' <span class="tag">移動中</span>' : ""}</span>
+    return `<div class="card ${here ? "here" : ""}">
+      <div class="title"><span>${c.name}${here ? ' <span class="tag here">現在地</span>' : ""}${going ? ' <span class="tag here">移動中</span>' : ""}</span>
         <span>${ch ? `${pair(c.currency)} ${px(pr[c.currency])} <span class="small ${signClass(ch.change)}">${ch.change >= 0 ? "+" : ""}${(ch.pct * 100).toFixed(2)}%</span>` : "円建て"}</span></div>
       <div class="small">${c.feature}</div>
       ${c.noMissions ? `<div class="small muted">研究室（対抗装置 ${game.deviceStage}/${CONFIG.endgame.device.length}）・情報収集</div>` : `<div class="small muted">探索：${ms.filter((m) => !m.special).map((m) => `${m.tierName} ${money(m.rewardLocal, c.currency)}（${m.days}日）`).join("／")}</div>`}
@@ -532,12 +612,12 @@ function townTab() {
   const missions = game.missions().map((m) => {
     const enemies = m.scouted ? enemyText(m.enemies) : `<span class="muted">不明（出現率の目安：${tendency(c, m.tier)}）</span>`;
     return `<div class="card">
-      <div class="title"><span>${m.special ? "★" : ""}${m.tierName} <span class="tag ${levelClass(m.level)}">敵Lv${m.level}</span><span class="tag">${m.days}日</span><span class="tag">${m.stages.length}戦</span>${m.feathers ? `<span class="tag warn">位相残晶${m.special ? m.feathers : `${m.feathers}〜${m.feathers + m.days}`}</span>` : ""}${m.scouted ? '<span class="tag">偵察済み</span>' : ""}</span>
-        <span>${money(m.rewardLocal, ccy)}<br><span class="muted small">いまなら ${yen(game.receiveYen(m.rewardLocal, ccy))}</span></span></div>
+      <div class="title"><span><span class="mtitle">${m.special ? `★${m.tierName}` : `${m.tierName}探索`} <span class="${levelClass(m.level)}">Lv.${m.level}</span></span><br><span class="tag days">${m.days}日</span><span class="tag">${m.stages.length}戦</span>${m.feathers ? `<span class="tag warn">位相残晶${m.special ? m.feathers : `${m.feathers}〜${m.feathers + m.days}`}</span>` : ""}${m.scouted ? '<span class="tag">偵察済み</span>' : ""}</span>
+        <span>獲得：${money(m.rewardLocal, ccy)}<br><span class="muted small">いまなら ${yen(game.receiveYen(m.rewardLocal, ccy))}</span></span></div>
       <div class="small">敵：${enemies}</div>
       ${m.special ? `<div class="small warn">${m.special.desc}${m.special.weapon ? `<br>勝てば ${weaponNote(m.special.weapon)}` : ""}<br>あと${daysBetween(game.date, m.special.expires)}日で消える</div>` : ""}
       <div class="row">
-        ${m.scouted ? "" : `<button class="mini" data-act="scout" data-key="${m.key}">偵察（${game.scoutDays()}日）</button>`}
+        ${m.scouted ? "" : `<button class="mini" data-act="scout" data-key="${m.key}">偵察（${game.scoutDays()}日${trainingFeeLabel(game.scoutDays())}）</button>`}
         <button class="mini go" data-act="prep" data-key="${m.key}">出撃準備</button>
       </div>
     </div>`;
@@ -545,12 +625,12 @@ function townTab() {
 
   const ammoRows = Object.entries(CONFIG.ammoTypes).map(([k, a]) => `
     <tr><td>${a.name}${cheap(k)}<br><span class="muted small">所持 ${game.ammo[k].toLocaleString()}発</span></td>
-      <td class="small">1発 ${loc(game.shopPrice(k))}<br><span class="muted">100発 ${yen(game.shopYen(k, 100))}</span></td>
+      <td class="small">1発 ${loc(game.shopPrice(k))}<br><span class="muted">100発 ${yen(game.shopYen(k, 100))}<br>500発 ${yen(game.shopYen(k, 500))}</span></td>
       <td><button class="mini" data-act="buyAmmo" data-type="${k}" data-n="100">+100</button>
         <button class="mini" data-act="buyAmmo" data-type="${k}" data-n="500">+500</button></td></tr>`).join("");
   const hasMedic = game.members.some((m) => m.role === "medic");
   const medRow = `<tr><td>${MEDKIT}${cheap("medkit")}<br><span class="muted small">所持 ${game.medkits}個</span></td>
-    <td class="small">1個 ${loc(game.shopPrice("medkit"))}<br><span class="muted">10個 ${yen(game.shopYen("medkit", 10))}</span></td>
+    <td class="small">1個 ${loc(game.shopPrice("medkit"))}<br><span class="muted">5個 ${yen(game.shopYen("medkit", 5))}<br>20個 ${yen(game.shopYen("medkit", 20))}</span></td>
     <td><button class="mini" data-act="buyMed" data-n="5">+5</button> <button class="mini" data-act="buyMed" data-n="20">+20</button></td></tr>
     ${hasMedic ? "" : `<tr><td colspan="3" class="small warn">衛生兵がいないので、${MEDKIT}は使われない。</td></tr>`}`;
   const weaponRows = game.shopWeapons().map((k) => {
@@ -562,12 +642,13 @@ function townTab() {
   }).join("");
 
   const full = game.members.length >= CONFIG.party.maxRoster;
-  const cands = game.candidates().map((h) => `<div class="card">
-      <div class="title"><span><b>Lv${h.level}</b> ${h.name ? `${h.name} ` : ""}<span class="muted small">${profileText(h)}${h.origin}の</span>${h.roleName}</span><span class="small">日給 ${money(h.wageLocal, h.currency)}<br><span class="muted">${yen(game.payYen(h.wageLocal, h.currency))}</span></span></div>
+  const cands = game.candidates().map((h) => `<div class="card member">
+      <div class="member-avatar">${roleIcon(h.role, 40)}</div><div class="member-body">
+      <div class="title"><span><b>Lv${h.level}</b> ${h.name ? `${h.name} ` : ""}<span class="role-name role-${h.role}">${h.roleName}</span> <span class="muted small">${profileText(h)}${h.origin}</span></span><span class="small">日給 ${money(h.wageLocal, h.currency)}<br><span class="muted">${yen(game.payYen(h.wageLocal, h.currency))}</span></span></div>
       <div class="small">${traitsHtml(h.traits)}</div>
       <div class="small muted">${CONFIG.weapons[h.weapon].name}・体力${game.memberStats(h).maxHp}${roleNote(h.role)}</div>
       <div class="row"><button class="mini" data-act="hire" data-id="${h.id}" ${full ? "disabled" : ""}>雇う</button></div>
-    </div>`).join("") || `<p class="muted small">現在、この都市では協力者は見当たらない。</p>`;
+    </div></div>`).join("") || `<p class="muted small">現在、この都市では協力者は見当たらない。</p>`;
 
   return `
     <section>
@@ -611,7 +692,7 @@ function homeSection() {
       <table>${deviceRows(game.busyReason())}</table></section>
     ${lensSection()}
     <section><h2>情報を集める${ti("intel")}</h2>
-      <div class="row"><button class="mini go" data-act="gatherIntel" ${intelWhy ? "disabled" : ""}>日銀・財務省筋の噂を集める（${h.takeDays}日）</button></div>
+      <div class="row"><button class="mini go" data-act="gatherIntel" ${intelWhy ? "disabled" : ""}>日銀・財務省筋の噂を集める（${h.takeDays}日${trainingFeeLabel(h.takeDays)}。次は${h.cooldownDays}日後）</button></div>
       ${intelWhy ? `<p class="muted small">${intelWhy}</p>` : ""}</section>`;
 }
 
@@ -622,16 +703,18 @@ function lensSection() {
   const seen = kinds.filter((d) => d.lens <= game.lensLevel).map((d) => d.name).join("・");
   const opens = next ? kinds.filter((d) => d.lens === game.lensLevel + 1).map((d) => `${d.name}（${d.desc}）`).join("<br>") : "";
   return `<section><h2>観測レンズ（${game.lensLevel + 1}/${lensStages}段階）${ti("lens")}</h2>
-    <p class="small">${game.lensName()}　観測できる特異な残滓：${seen}</p>
+    <p class="small">${game.lensName()}　探索の補正：${lensBonusText(game.lensLevel)}・偵察の噂の確からしさ${pct(game.scoutAccuracy())}<br>観測できる特異な残滓：${seen}</p>
     ${next ? `<div class="row"><button class="mini go" data-act="upgradeLens" ${game.status().available >= next.yen && game.feathers >= next.feathers ? "" : "disabled"}>${next.name}に強化（${yen(next.yen)}・位相残晶${next.feathers}）</button></div>
-      ${opens ? `<p class="muted small">強化後に観測できる残滓：<br>${opens}</p>` : ""}` : '<p class="muted small">最大強化済み</p>'}</section>`;
+      <p class="muted small">強化後の探索の補正：${lensBonusText(game.lensLevel + 1)}・偵察の噂の確からしさ${pct(game.scoutAccuracy(game.lensLevel + 1))}${opens ? `<br>強化後に観測できる残滓：<br>${opens}` : ""}</p>` : '<p class="muted small">最大強化済み</p>'}</section>`;
 }
 
 // 部隊のレベルの目安（仲間の平均・銃の平均）
+//   銃は、編成中の仲間が装備している種類だけを、種類ごとに1回ずつ数える（予備の銃・持っていない種類は入れない）
 function partyLevel() {
   const ms = game.activeMembers();
-  const avg = (f) => ms.reduce((a, m) => a + f(m), 0) / Math.max(1, ms.length);
-  return { member: avg((m) => m.level ?? 1), weapon: avg((m) => game.weaponLevel(m.weapon)) };
+  const avg = (list) => list.reduce((a, v) => a + v, 0) / Math.max(1, list.length);
+  const types = [...new Set(ms.map((m) => m.weapon))];
+  return { member: avg(ms.map((m) => m.level ?? 1)), weapon: avg(types.map((k) => game.weaponLevel(k))) };
 }
 
 function partyLevelText() {
@@ -676,9 +759,10 @@ function weaponSection() {
     const w = CONFIG.weapons[k];
     const lv = game.weaponLevel(k);
     const users = game.members.filter((m) => m.weapon === k).map((m) => m.name).join("、") || `予備${game.spareWeapons[k] ?? 0}`;
-    return `<tr><td>${w.name}<br><span class="muted small">${users}</span></td>
+    // 使っている仲間の名前は折り返す（人数が多いと枠の外にはみ出すため）
+    return `<tr><td class="wrap">${w.name}<br><span class="muted small">${users}</span></td>
       <td><b>Lv${lv}</b><br><span class="muted small">攻撃力${Math.round(w.damage * CONFIG.levels.allyGrowth ** (lv - 1))}</span></td>
-      <td>${lv < max ? `<button class="mini" data-act="upgrade" data-weapon="${k}" ${game.travel ? "disabled" : ""}>強化 ${yen(game.weaponUpgradeYen(k))}</button>` : '<span class="muted small">最大</span>'}</td></tr>
+      <td>${lv < max ? `<button class="mini" data-act="upgrade" data-weapon="${k}" ${game.travel ? "disabled" : ""}>強化<br>${yen(game.weaponUpgradeYen(k))}</button>` : '<span class="muted small">最大</span>'}</td></tr>
       <tr><td colspan="3" class="muted small wrap">${w.desc}</td></tr>`;
   }).join("");
   return `<section><h2>銃の強化${ti("weaponUp")}</h2><table>${rows}</table></section>`;
@@ -693,20 +777,25 @@ function partyTab() {
     const choices = [m.weapon, ...Object.keys(game.spareWeapons).filter((k) => game.spareWeapons[k] > 0 && k !== m.weapon)];
     const injured = game.isInjured(m);
     const lv = m.level ?? 1;
-    return `<div class="card" ${m.active === false ? 'style="opacity:.6"' : ""}>
-      <div class="title"><span>${m.name}${m.origin ? ` <span class="muted small">${profileText(m)}${m.origin}</span>` : ""}${m.active === false ? ' <span class="tag">編成外</span>' : ""}
+    // こよみは立ち絵、ほかの仲間は役割のアイコン
+    const face = m.id === "hero" && CONFIG.ui?.heroPortrait
+      ? `<img class="member-face" src="${CONFIG.ui.heroPortrait}" alt="">`
+      : roleIcon(m.role, 40);
+    return `<div class="card member" ${m.active === false ? 'style="opacity:.6"' : ""}>
+      <div class="member-avatar">${face}</div><div class="member-body">
+      <div class="title"><span><b>Lv${lv}</b> ${m.name} <span class="role-name role-${m.role}">${role.name}</span>${m.origin ? ` <span class="muted small">${profileText(m)}${m.origin}</span>` : ""}${m.active === false ? ' <span class="tag">編成外</span>' : ""}
         ${injured ? `<span class="tag down">負傷 あと${game.injuryDaysLeft(m)}日</span>` : ""}${m.unpaidDays ? '<span class="tag down">日給未払い</span>' : ""}</span>
         <span class="small">${m.wageLocal ? `日給 ${money(m.wageLocal, m.currency)}` : ""}</span></div>
-      <div class="small"><b>Lv${lv}</b> <span class="muted">${role.name}・体力${st.maxHp}・${CONFIG.weapons[m.weapon].name} Lv${game.weaponLevel(m.weapon)}${roleNote(m.role)}</span>${rowNote(m)}</div>
+      <div class="small muted">体力${st.maxHp}・${CONFIG.weapons[m.weapon].name} Lv${game.weaponLevel(m.weapon)}${roleNote(m.role)}${rowNote(m)}</div>
       ${m.traits?.length ? `<div class="small">${traitsHtml(m.traits)}</div>` : ""}
       <div class="row">
         <select data-change="equip" data-id="${m.id}">${choices.map((k) => opt(k, CONFIG.weapons[k].name, k === m.weapon)).join("")}</select>
         <select data-change="row" data-id="${m.id}" ${CONFIG.weapons[m.weapon].rows ? "disabled" : ""}>${opt("front", "前列", m.row === "front")}${opt("back", "後列", m.row === "back")}</select>
-        ${lv < maxLv ? `<label><input type="checkbox" data-change="training" data-id="${m.id}" ${m.training ? "checked" : ""} style="width:auto"> 訓練（${(m.trainingDays ?? 0).toFixed(1).replace(".0", "")}/${tr.daysPerLevel}日）</label>` : '<span class="muted small">Lv最大</span>'}
+        ${lv < maxLv ? `<label><input type="checkbox" data-change="training" data-id="${m.id}" ${m.training ? "checked" : ""} style="width:auto"> 訓練（${(m.trainingDays ?? 0).toFixed(1).replace(".0", "")}/${tr.daysPerLevel}日・1日 ${yen(game.trainingFeeYen(m))}）</label>` : '<span class="muted small">Lv最大</span>'}
         ${m.id === "hero" ? "" : `<label><input type="checkbox" data-change="active" data-id="${m.id}" ${m.active !== false ? "checked" : ""} style="width:auto"> 編成</label>`}
-        ${m.id === "hero" ? "" : `<button class="mini danger" data-act="dismiss" data-id="${m.id}">解雇</button>`}
+        ${m.id === "hero" ? "" : `<button class="mini danger" data-act="dismiss" data-id="${m.id}" ${game.travel ? "disabled" : ""}>解雇（退職金 ${yen(game.severanceYen(m))}）</button>`}
       </div>
-    </div>`;
+    </div></div>`;
   }).join("");
   const ammo = Object.entries(CONFIG.ammoTypes).map(([k, a]) => `<div>${a.name}</div><div>${game.ammo[k].toLocaleString()}発</div>`).join("");
   const spares = Object.entries(game.spareWeapons).filter(([, n]) => n > 0).map(([k, n]) => `${CONFIG.weapons[k].name}×${n}`).join("、") || "なし";
@@ -746,6 +835,7 @@ function fxAcctHtml() {
       <div>必要証拠金</div><div>${yen(st.required)}</div>
       <div>証拠金維持率</div><div class="${st.ratio < 1 ? "down" : st.ratio < 2 ? "warn" : ""}">${ratio}</div>
       <div>使える額</div><div>${yen(st.available)}</div>
+      <div>レバレッジ</div><div>最大${maxLeverage(game.date)}倍</div>
 `;
 }
 
@@ -776,13 +866,8 @@ function fxPositionsHtml() {
 
 function fxTab() {
   const f = ui.fx;
+  // 並び：新規注文 → ポジション → 相場 → 手がかり → 口座 → 用語と考え方
   return `
-    <section><h2>相場${ti("fxTrade")}</h2>
-      <table><tr><th>通貨</th><th>売値</th><th>買値</th><th>前日比</th></tr><tbody id="fxQuotes">${fxQuotesHtml()}</tbody></table>
-      <div class="row between"><span class="big warn">${pair(f.ccy)}</span><span class="muted small">直近90営業日の終値</span></div>
-      <canvas id="fxChart" style="height:150px"></canvas></section>
-    ${hintsSection()}
-    <section><h2>口座${ti("fxAccount")}</h2><div class="kv" id="fxAcct">${fxAcctHtml()}</div></section>
     <section><h2>新規注文${ti("fxOrder")}</h2>
       <div class="row"><select data-change="fxCcy">${game.market.currencies.map((c) => opt(c, pair(c), c === f.ccy)).join("")}</select>
         <label>数量 <input id="fxUnits" data-fx="units" type="number" step="1000" min="1000" value="${f.units}"></label>
@@ -793,7 +878,51 @@ function fxTab() {
         <button class="mini" data-act="riskUnits">数量を計算</button></div>
       <div id="orderPreview" class="small" style="line-height:1.7"></div>
       <div class="row"><button class="buy" data-act="order" data-side="buy">${pair(f.ccy)}を買う</button><button class="sell" data-act="order" data-side="sell">${pair(f.ccy)}を売る</button></div></section>
-    <section><h2>ポジション</h2><table><tr><th>通貨</th><th>売買</th><th>数量</th><th>建値</th><th>損益</th><th></th></tr><tbody id="fxPos">${fxPositionsHtml()}</tbody></table></section>`;
+    <section><h2>ポジション</h2><table><tr><th>通貨</th><th>売買</th><th>数量</th><th>建値</th><th>損益</th><th></th></tr><tbody id="fxPos">${fxPositionsHtml()}</tbody></table></section>
+    <section><h2>相場${ti("fxTrade")}</h2>
+      <table><tr><th>通貨</th><th>売値</th><th>買値</th><th>前日比</th></tr><tbody id="fxQuotes">${fxQuotesHtml()}</tbody></table>
+      <div class="row between"><span class="big warn">${pair(f.ccy)}</span><span class="muted small">直近${CONFIG.fx.historyDays}営業日</span></div>
+      <canvas id="fxChart" style="height:150px"></canvas>
+      <p class="chart-note">※終値は実際の値です（日中の値動きは模擬）</p></section>
+    ${hintsSection()}
+    <section><h2>口座${ti("fxAccount")}</h2><div class="kv" id="fxAcct">${fxAcctHtml()}</div></section>
+    ${fxGuideHtml()}`;
+}
+
+// FX口座の一番下：用語の解説と基本的な考え方（折りたたみ。数値は config から）
+function fxGuideHtml() {
+  const fx = CONFIG.fx;
+  const lc = `${Math.round(fx.losscutRatio * 100)}%`;
+  const ccys = game.market.currencies.map((c) => `${ccyName(c)}（${pair(c)}）`).join("・");
+  const rules = [...fx.leverageRules].reverse();
+  const levText = rules.map((r, i) => (i === 0 ? `はじめは${r.max}倍` : `${formatJa(r.from).replace(/\(.\)$/, "")}から${r.max}倍`)).join("、");
+  const term = (t, d) => `<dt>${t}</dt><dd>${d}</dd>`;
+  return `<section class="guide"><h2>FXの用語と考え方</h2>
+    <details><summary>用語の解説</summary><dl>
+      ${term("通貨ペア", `取引する2つの通貨の組み合わせ。このゲームでは、${ccys}の4つ。USD/JPY が 150.000 なら「1ドル＝150円」。`)}
+      ${term("円安・円高", "USD/JPY などの値が上がるのが円安（外国の通貨が高くなる）、下がるのが円高。")}
+      ${term("買い（ロング）・売り（ショート）", "外国の通貨が上がると思えば買い、下がると思えば売り。売りは、持っていない通貨を先に売って、あとで買い戻す取引。")}
+      ${term("売値・買値・スプレッド", "売るときの値段（売値）は少し安く、買うときの値段（買値）は少し高い。この差がスプレッドで、取引のたびにかかる手数料のようなもの。")}
+      ${term("数量", `取引する外国の通貨の量。${fx.minUnits.toLocaleString()}通貨から、${fx.unitStep.toLocaleString()}通貨単位で注文できる。1万通貨なら、1円動くと1万円の損益。`)}
+      ${term("建値・ポジション", "取引を始めたときの値段が建値。取引中の買い・売りをポジションという。")}
+      ${term("含み損益・決済", "ポジションを持っている間の損益は、まだ確定していない（含み損益）。「決済」すると損益が確定し、現金が増減する。")}
+      ${term("損切り・利確", "あらかじめ「ここまで逆に動いたら決済」（損切り）、「ここまで動いたら決済」（利確）を決めておくと、その値に届いたとき自動で決済される。日の途中でも働く。")}
+      ${term("レバレッジ", `手元の資金の何倍の取引ができるか。いまの上限は${maxLeverage(game.date)}倍（${levText}。実際の規制の変化をもとにしている）。`)}
+      ${term("必要証拠金・有効証拠金", "必要証拠金は、ポジションを持つのに預けておくお金（数量×値段÷レバレッジ）。有効証拠金は、現金に含み損益を足したもの。")}
+      ${term("証拠金維持率・ロスカット", `証拠金維持率＝有効証拠金÷必要証拠金。これが${lc}を下回ると、損失がそれ以上広がらないよう、すべてのポジションが自動で決済される（強制ロスカット）。`)}
+      ${term("スワップ", "通貨の金利の差の受け払い。金利の高い通貨を買って持つと毎日少し受け取り、売って持つと支払う。このゲームでは、受け取りより支払いのほうが重い。")}
+      ${term("使える額", "現金から必要証拠金を除いた、町での買い物や日給に使えるお金。含み益は使えない。")}
+    </dl></details>
+    <details><summary>基本的な考え方</summary><ul>
+      <li><b>FXとは、</b>外国為替証拠金取引のこと。円と外国の通貨を交換する値段（為替レート）が上がるか下がるかを予想して、その差で利益を狙う。預けたお金（証拠金）を担保に、その何倍もの金額を取引できる。このゲームの為替レートは、過去に実際にあった値。</li>
+      <li><b>損益は「値幅×数量」。</b>買いなら上がった分、売りなら下がった分だけ利益になる。1万通貨で2円動けば2万円。</li>
+      <li><b>先に損切りを決める。</b>「どこまで逆に動いたらあきらめるか」と「そのとき資金の何%を失ってよいか」から数量を決める（新規注文の「数量を計算」）。</li>
+      <li><b>レバレッジは利益も損失も大きくする。</b>大きく張るほど、少しの逆の値動きで維持率が下がり、ロスカットに近づく。</li>
+      <li><b>日中も相場は動く。</b>終値どうしの差が小さくても、日の途中で大きく振れることがある。損切りを狭くしすぎると、途中の振れで決済されやすい。</li>
+      <li><b>手がかりを使う。</b>記憶の断片は、実際に起きた出来事の前後の値動きの向きを示す。噂は外れることもある。どちらも、正確な日付や動く幅までは分からない。</li>
+      <li><b>探索中・移動中に注意。</b>探索中は取引に関与できないが、持っているポジションは動き続け、損切り・利確・ロスカットも働く。長く留守にする前は、損切りを置いておく。</li>
+      <li><b>一度に全部を賭けない。</b>FXの資金は、部隊の日給や弾薬の資金でもある。大きく負けると、探索も決戦の準備もできなくなる。</li>
+    </ul></details></section>`;
 }
 
 // FXの手がかり：記憶の断片と、偵察・東京で聞いた噂
@@ -922,7 +1051,8 @@ function renderPrep() {
       <div class="kv small">
         <div>探索</div><div>${m.cityName}・${m.tierName}</div>
         <div>敵Lv・戦闘数・日数</div><div><span class="${levelClass(m.level)}">Lv${m.level}</span>・${m.stages.length}戦・${m.days}日</div>
-        <div>売却額</div><div>${money(m.rewardLocal, m.currency)}（約${yen(game.receiveYen(m.rewardLocal, m.currency))}）${m.feathers ? (m.special ? `＋位相残晶${m.feathers}個` : `＋位相残晶${m.feathers}〜${m.feathers + m.days}個（${m.feathers}個は確実）`) : ""}</div>
+        <div>回収品売却額</div><div>${money(m.rewardLocal, m.currency)}（約${yen(game.receiveYen(m.rewardLocal, m.currency))}）</div>
+        <div>獲得位相残晶</div><div>${m.feathers ? (m.special ? `${m.feathers}個` : `${m.feathers}〜${m.feathers + m.days}個`) : "なし"}</div>
         <div>日給（${m.days}日分）</div><div>約${yen(wageCost)}</div>
         <div>差し引き（弾・${MEDKIT}の代金は別）</div><div class="${game.receiveYen(m.rewardLocal, m.currency) >= wageCost ? "up" : "down"}">約${yen(game.receiveYen(m.rewardLocal, m.currency) - wageCost)}</div>
       </div>
@@ -1032,6 +1162,7 @@ function launch() {
   };
   ui.view = "sortie";
   ui.toast = null;
+  hideReaction();
   buildSortieView();
   setStageRange();
   requestAnimationFrame(sortieTick);
@@ -1058,9 +1189,11 @@ function launchFinal() {
   };
   ui.view = "sortie";
   ui.toast = null;
+  hideReaction();
   buildSortieView();
   setStageRange();
   requestAnimationFrame(sortieTick);
+  react("final");
 }
 
 // いまの戦闘が受け持つチャートの範囲（任務の日数を戦闘の数で分ける）
@@ -1294,6 +1427,8 @@ function finishSortie() {
   ui.sortie = null;
   ui.view = "result";
   render();
+  // こよみの反応：勝てば出撃中のFXの様子、負ければ（撤退・全滅）負けの台詞
+  react(r.result.outcome === "win" ? fxReaction(s.s.events, s.frames?.[0]?.positions, true) : "defeat");
 }
 
 // ───────── 結果 ─────────
@@ -1339,7 +1474,7 @@ function renderEnd() {
   const o = game.over;
   const endings = {
     funds: `<h1 class="up" style="margin-top:0">クリア：エンド2（掌握・真エンド）</h1>
-      <p>財団の株式の過半数を握り、「${CONFIG.endgame.shares.research}」を止めた。</p>
+      <p>${CONFIG.endgame.shares.shortName}の株式の過半数を握り、「${CONFIG.endgame.shares.research}」を止めた。</p>
       <p>ドゥームズデイは来なかった。ブラックスワンという名前を、もう誰も知ることはない。</p>`,
     battle: `<h1 class="up" style="margin-top:0">クリア：エンド1（打破）</h1>
       <p>${formatJa(game.deadline)}、${game.deviceComplete() ? "対抗装置を建造し、" : game.deviceStage ? "未完成の対抗装置の力を借りて、" : "対抗装置なしで、"}部隊はブラックスワンを討ち果たした。</p>
@@ -1349,6 +1484,9 @@ function renderEnd() {
     bankrupt: `<h1 class="down" style="margin-top:0">ゲームオーバー：エンド4（破滅）</h1><p>破産した。お金は計画的に使おう。</p>`,
   };
   const head = o.reason === "clear" ? endings[o.route] : endings[o.reason];
+  // エンディングのスチル（場面の中で最後に出したもの）を、画面の下の方にもう一度出す
+  const endId = ENDING_STORY[o.reason === "clear" ? o.route : o.reason];
+  const endStill = STILLS[[...(STORY[endId] ?? [])].reverse().find((x) => STILLS[x.bg])?.bg];
   const diff = st.equity - CONFIG.run.initialFunds;
   const s = game.stats;
   app.innerHTML = `
@@ -1358,7 +1496,7 @@ function renderEnd() {
         <div>最終資金</div><div>${yen(st.equity)}</div>
         <div>初期資金からの増減</div><div class="${signClass(diff)}">${signedYen(diff)}</div>
         <div>対抗装置</div><div>${game.deviceStage}/${CONFIG.endgame.device.length}段階</div>
-        <div>財団の株式</div><div>${game.shares.toFixed(1)}%</div>
+        <div>${CONFIG.endgame.shares.shortName}の株式</div><div>${game.shares.toFixed(1)}%</div>
         ${s["final.formsTotal"] ? `<div>決戦で倒した形態</div><div>${s["final.formsCleared"]}/${s["final.formsTotal"]}</div>` : ""}
         <div>部隊</div><div>${game.members.length}人（${partyLevelText()}）</div>
         <div>失った仲間</div><div>${game.lost.length}人</div>
@@ -1371,6 +1509,7 @@ function renderEnd() {
       <p class="muted small">4通貨の円に対する値動き（周回の初日を100とした）。縦線は下の出来事。</p>
       ${answerKeyHtml()}</section>
     <section><h2>この周回の記録</h2><pre style="max-height:300px;overflow:auto">${game.logs.map((l) => l.text).join("\n")}</pre></section>
+    ${endStill ? `<section class="end-still"><img src="${endStill}" alt=""></section>` : ""}
     <div class="row"><button class="go" data-act="toTitle">タイトルへ</button></div>`;
 }
 
@@ -1378,7 +1517,7 @@ function renderEnd() {
 function answerKeyHtml() {
   const list = game.answerKey();
   if (!list.length) return '<p class="muted small">この期間には、大きな出来事はなかった。</p>';
-  return list.map((e, i) => `<div class="card"><div class="title"><span>${i + 1}. ${formatJa(e.date)}　${e.title ?? "（一覧にない大きな値動き）"}</span>
+  return list.map((e, i) => `<div class="card"><div class="title"><span>${i + 1}. ${formatJa(e.date)}${e.title ? `　${e.title}` : ""}</span>
       <span class="small ${e.recalled ? "up" : "muted"}">${e.recalled ? "思い出した" : "思い出せなかった"}</span></div>
       ${e.title ? `<div class="small">${e.memory}</div>` : ""}
       <div class="small warn">${e.effect.replace("気がする。", "。")}</div>
@@ -1393,6 +1532,15 @@ function weakText(type) {
   const top = Math.max(0, ...Object.values(mods));
   const names = Object.entries(mods).filter(([, v]) => v === top && v > 1).map(([k]) => CONFIG.ammoTypes[k].name);
   return names.join("・") || "？";
+}
+
+// 決戦に持っていく弾の目安（仲間が倒れないものとした試算。game.finalAmmoGuide）。勝てるかどうかは出さない
+function finalGuideHtml() {
+  const g = game.finalAmmoGuide();
+  if (g.unknown) return `<p class="small">持っていく弾の目安：<span class="warn">推測不能</span></p>`;
+  const keys = Object.keys(CONFIG.ammoTypes).filter((k) => g[k] > 0);
+  const items = keys.map((k) => `<span class="${game.ammo[k] < g[k] ? "warn" : ""}">${itemName(k)}${g[k].toLocaleString()}（所持${game.ammo[k].toLocaleString()}）</span>`).join("・");
+  return `<p class="small">持っていく弾の目安：${items || "—"}</p>`;
 }
 
 function finalTab() {
@@ -1415,10 +1563,11 @@ function finalTab() {
     <section><h2>対抗装置（${game.deviceStage}/${eg.device.length}段階）${ti("lab")}</h2>
       <p class="small">位相残晶：<b class="warn">${game.feathers}</b></p>
       <table>${devRows}</table></section>
-    <section><h2>財団の株式（保有 ${game.shares.toFixed(1)}%）${ti("shares")}</h2>
+    <section><h2>${CONFIG.endgame.shares.shortName}の株式（保有 ${game.shares.toFixed(1)}%）${ti("shares")}</h2>
       <div class="kv small">
         <div>次の1%の値段</div><div>${yen(next1)}</div>
         <div>この期間の値段の補正</div><div>×${game.periodFactor.toFixed(2)}</div>
+        <div>時期の補正（研究の進み）</div><div>×${game.shareTimeFactor().toFixed(2)}（ドゥームズデイには×${(1 + (sh.priceGrowth ?? 0)).toFixed(2)}）</div>
         <div>毎月の配当</div><div>${yen(game.sharesPaid * sh.dividendMonthly)}（払った額の${(sh.dividendMonthly * 100).toFixed(1)}%）</div>
         <div>株主優待</div><div>${perk ? `造兵廠${pct(perk.discount)}引き・毎月 ${giftText(perk.gift)}` : "なし"}</div>
       </div>
@@ -1427,7 +1576,7 @@ function finalTab() {
     <section><h2>ブラックスワン（観測の記録）${ti("boss")}</h2>
       <p class="small">レベル：<b class="${levelClass(game.bossLevel())}">Lv${game.bossLevel()}</b>（株式なしならLv${eg.bossLevel}。買った株式 ${game.sharesBought}%）　部隊：${partyLevelText()}</p>
       ${formRows}
-      <p class="small">持っていく量の目安：${Object.entries(eg.ammoGuide).map(([k, n]) => `${itemName(k)}${n}（所持${k === "medkit" ? game.medkits : game.ammo[k]}）`).join("・")}</p>
+      ${finalGuideHtml()}
 </section>
     <section><h2>決戦</h2>
       ${game.finalPending
@@ -1435,8 +1584,10 @@ function finalTab() {
            ${game.deviceComplete() ? "" : `<p class="small down">対抗装置が${game.deviceStage ? "未完成" : "ない"}：${deviceMissingText()}。</p>`}
            <div class="row"><button class="go" data-act="launchFinal">決戦に臨む</button></div>`
         : `${game.deviceComplete() ? "" : `<p class="small down">対抗装置が${game.deviceStage ? "未完成" : "ない"}。このままでは${deviceMissingText()}。</p>`}
-             <div class="row"><button class="go" data-act="declare" ${game.finalPending ? "disabled" : ""}>決戦に進む（${game.daysLeft}日後）</button>${ti("declare")}</div>`}</section>
-    <div class="row"><button class="mini" data-act="replayIntro">導入（ストーリーと遊び方）をもう一度見る</button></div>`;
+             <div class="row"><button class="go" data-act="declare" ${game.finalPending ? "disabled" : ""}>決戦に進む（${game.daysLeft}日後）</button>${ti("declare")}</div>
+             ${game.finalPending ? "" : `<p class="small muted">${upkeepNote(game.daysLeft)}</p>`}`}</section>
+    <div class="row"><button class="mini" data-act="replayIntro">導入（ストーリーと遊び方）をもう一度見る</button></div>
+    <div class="row"><button class="mini" data-act="toTitle">タイトルに戻る</button><span class="muted small">「続きから」で再開できます</span></div>`;
 }
 
 // ───────── 操作 ─────────
@@ -1446,26 +1597,113 @@ function toast(text, error = false) {
   render();
 }
 
-// 日数を飛ばしたときも、その間のチャートの動きを再生してから結果を出す
-function afterTimePass(r, label, view = null) {
-  // ポジションがなければ再生しない
-  const held = r.frames?.some((f) => f.positions?.length);
-  if (r.frames?.length > 1 && held && !ui.noPlayback) return playPass(r, () => afterTimePassDone(r, label, view));
-  afterTimePassDone(r, label, view);
+// 移動の演出：世界地図の上を、ちびキャラが出発地から目的地まで歩く。押すと飛ばせる
+// 移動の地図（出発地・目的地・道筋・ちびキャラ）。moveTo(e) で 0〜1 の進み具合に合わせてちびキャラを動かす
+function travelMap(fromId, toId) {
+  const cityOf = (id) => CONFIG.cities.find((c) => c.id === id);
+  const a = mapPosition(cityOf(fromId).lon, cityOf(fromId).lat);
+  const b = mapPosition(cityOf(toId).lon, cityOf(toId).lat);
+  const html = `<div class="map travel-map">
+        ${landPath ? `<svg viewBox="-180 -80 360 140" preserveAspectRatio="none" aria-hidden="true"><path d="${landPath}"/></svg>` : ""}
+        <svg class="travel-route" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><line x1="${a.left}" y1="${a.top}" x2="${b.left}" y2="${b.top}"/></svg>
+        <span class="travel-pin" style="left:${a.left}%;top:${a.top}%"></span>
+        <span class="travel-pin to" style="left:${b.left}%;top:${b.top}%"></span>
+        <img class="travel-chibi" src="${CONFIG.ui?.travelChibi?.[b.left < a.left ? "left" : "right"] ?? ""}" alt="" style="left:${a.left}%;top:${a.top}%">
+      </div>`;
+  const moveTo = (root, e) => {
+    const chibi = root?.querySelector(".travel-chibi");
+    if (!chibi) return;
+    e = Math.max(0, Math.min(1, e));
+    chibi.style.left = `${a.left + (b.left - a.left) * e}%`;
+    chibi.style.top = `${a.top + (b.top - a.top) * e}%`;
+  };
+  return { html, moveTo, title: `${cityOf(fromId).name} → ${cityOf(toId).name}` };
 }
 
-function playPass(r, done) {
+function playTravel(fromId, toId, fromDate, toDate, done) {
+  const tm = travelMap(fromId, toId);
+  const days = Math.max(1, daysBetween(fromDate, toDate));
+  const total = CONFIG.ui?.travelMs ?? 2200;
+  closeTip();
+  const root = document.createElement("div");
+  root.className = "travel";
+  root.innerHTML = `<div class="travel-panel">
+      <div class="travel-head"><span>${tm.title}</span><span class="travel-day"></span></div>
+      ${tm.html}
+      <p class="muted small travel-skip">押すと飛ばせる</p></div>`;
+  document.body.appendChild(root);
+  const dayEl = root.querySelector(".travel-day");
+  // t0 は最初のコマで決める（requestAnimationFrame の時刻は、呼んだ時点より少し前になることがある）
+  let t0 = null;
+  let raf = 0;
+  let ended = false;
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    cancelAnimationFrame(raf);
+    root.remove();
+    done();
+  };
+  const frame = (now) => {
+    if (t0 == null) t0 = now;
+    const t = Math.max(0, Math.min(1, (now - t0) / total));
+    const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    tm.moveTo(root, e);
+    const d = Math.min(days, Math.max(1, Math.ceil(e * days)));
+    dayEl.textContent = `${d}/${days}日目　${formatJa(addDays(fromDate, d))}`;
+    if (t < 1) raf = requestAnimationFrame(frame);
+    else setTimeout(finish, 450);
+  };
+  root.addEventListener("click", (e) => {
+    e.stopPropagation();
+    finish();
+  });
+  raf = requestAnimationFrame(frame);
+}
+
+// 日数を飛ばしたときも、その間のチャートの動きを再生してから結果を出す
+// FXの様子からこよみの反応を選ぶ（ロスカット・損切り・利確が起きたら優先。なければいまの含み損益）
+//   noPosition：始めからポジションがなかったときも反応するか（探索に勝ったときだけ）
+function fxReaction(events = [], startPositions = [], noPosition = false) {
+  const types = new Set(events.map((e) => e.type));
+  if (types.has("losscut")) return "losscut";
+  if (types.has("stopLoss")) return "stopLoss";
+  if (types.has("takeProfit")) return "takeProfit";
+  if (game.account.positions.length) {
+    const u = game.status().unrealized;
+    if (u < 0) return "unrealizedLoss";
+    if (u > 0) return "unrealizedGain";
+  }
+  return noPosition && !startPositions?.length ? "noPosition" : null;
+}
+
+// 日数を飛ばしたあと、値動きを再生するか（ポジションがあるときだけ）
+function willPlayPass(r) {
+  return r.frames?.length > 1 && r.frames.some((f) => f.positions?.length) && !ui.noPlayback;
+}
+
+function afterTimePass(r, label, view = null, reaction = null, travel = null) {
+  if (willPlayPass(r)) return playPass(r, () => afterTimePassDone(r, label, view, reaction), travel);
+  afterTimePassDone(r, label, view, reaction);
+}
+
+function playPass(r, done, travel = null) {
   saveGame(); // 再生の途中で閉じても、日は進んだまま
   const frames = r.frames;
   const held = frames[0].positions ?? [];
   const days = Math.max(1, daysBetween(frames[0].date, frames[frames.length - 1].date));
-  const p = { frames, i: 0, start: performance.now(), total: Math.min(6000, 1000 + days * 700), ccy: held[0]?.ccy ?? ui.fx.ccy ?? game.market.currencies[0], done };
+  // start は最初のコマで決める（requestAnimationFrame に渡される時刻は、呼んだ時点の performance.now() より
+  // 少し前になることがあり、進み具合がマイナスになって存在しないコマを読み、止まってしまうため）
+  const p = { frames, i: 0, start: null, total: Math.min(6000, 1000 + days * 700), ccy: held[0]?.ccy ?? ui.fx.ccy ?? game.market.currencies[0], done };
+  // 移動のときは、地図の上を走るちびキャラを値動きと並べて出す（同じ進み具合で動く）
+  p.travel = travel ? travelMap(travel.from, travel.to) : null;
   ui.pass = p;
   ui.view = "pass";
   closeTip();
   app.innerHTML = `
     <div class="topbar static"><div class="row between" style="margin:0"><span class="warn">時が流れる</span><span id="pDays" class="small"></span></div>
       <div id="pClock" class="small"></div><div class="bar"><div id="pBar"></div></div></div>
+    ${p.travel ? `<section class="pass-travel" id="pTravel"><div class="travel-head"><span>${p.travel.title}</span></div>${p.travel.html}</section>` : ""}
     <section style="margin-top:6px">
       <div class="row between" style="margin:0 0 4px"><select id="pCcy">${game.market.currencies.map((c) => opt(c, pair(c), c === p.ccy)).join("")}</select><span id="pPnl"></span></div>
       <canvas id="pChart" style="height:160px"></canvas>
@@ -1474,9 +1712,17 @@ function playPass(r, done) {
   $("pCcy").addEventListener("change", (e) => { p.ccy = e.target.value; drawPassFrame(); });
   const tick = (now) => {
     if (ui.pass !== p) return;
-    p.i = Math.min(frames.length - 1, Math.floor(((now - p.start) / p.total) * (frames.length - 1)));
-    drawPassFrame();
-    if (p.i >= frames.length - 1) return setTimeout(() => finishPass(p), 400);
+    if (p.start == null) p.start = now;
+    const t = Math.max(0, Math.min(1, (now - p.start) / p.total));
+    p.i = Math.round(t * (frames.length - 1));
+    try {
+      drawPassFrame();
+    } catch (err) {
+      // 描画で失敗しても、再生の画面で止まらずに結果へ進む
+      console.error(err);
+      return finishPass(p);
+    }
+    if (t >= 1) return setTimeout(() => finishPass(p), 400);
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
@@ -1485,7 +1731,9 @@ function playPass(r, done) {
 function drawPassFrame() {
   const p = ui.pass;
   if (!p) return;
+  p.i = Math.max(0, Math.min(p.frames.length - 1, p.i));
   const f = p.frames[p.i];
+  if (!f) return;
   const steps = game.market.steps;
   const hh = Math.floor((f.step * 24) / steps);
   const time = !f.trading && f.step ? "休場" : `${String(hh).padStart(2, "0")}:00`;
@@ -1496,6 +1744,7 @@ function drawPassFrame() {
   $("pPnl").innerHTML = `含み損益 <span class="${signClass(st.unrealized)}">${signedYen(st.unrealized)}</span>`;
   $("pRatio").innerHTML = st.ratio === Infinity ? "ポジションなし" : `維持率 <span class="${st.ratio < 1 ? "down" : st.ratio < 2 ? "warn" : ""}">${pct(st.ratio)}</span>　有効証拠金 ${yen(st.equity)}`;
   drawSortie($("pChart"), p.frames, p.i, p.ccy);
+  if (p.travel) p.travel.moveTo($("pTravel"), p.i / Math.max(1, p.frames.length - 1));
 }
 
 function finishPass(p) {
@@ -1515,7 +1764,7 @@ function leveledText(names) {
   }).join("、");
 }
 
-function afterTimePassDone(r, label, view = null) {
+function afterTimePassDone(r, label, view = null, reaction = null) {
   const lines = [label];
   for (const ev of r.events) {
     const t = describeEvent(ev);
@@ -1535,6 +1784,8 @@ function afterTimePassDone(r, label, view = null) {
   }
   if (view) ui.view = view;
   toast(lines.join("\n"));
+  // こよみの反応：偵察なら偵察の台詞、ほかはFXの様子（ポジションがなければ何も言わない）
+  react(reaction ?? fxReaction(r.events, r.frames?.[0]?.positions));
 }
 
 const actions = {
@@ -1542,6 +1793,8 @@ const actions = {
     showTip(el.dataset.tip, el);
   },
   closeTip,
+  openLore,
+  openDisclaimer,
   replayIntro() {
     startStory("intro", 0, { replay: true });
   },
@@ -1557,7 +1810,7 @@ const actions = {
   upgradeLens() {
     const r = game.upgradeLens();
     if (!r.ok) return toast(r.error, true);
-    toast(`観測レンズを強化した（${r.lens.name}）${r.opened.length ? `。「${r.opened.join("・")}」を観測できるようになった` : ""}`);
+    toast(`観測レンズを強化した（${r.lens.name}。探索の${lensBonusText(game.lensLevel)}）${r.opened.length ? `。「${r.opened.join("・")}」を観測できるようになった` : ""}`);
   },
   gatherIntel() {
     const r = game.gatherIntel();
@@ -1567,6 +1820,7 @@ const actions = {
   build() {
     const r = game.buildDevice();
     toast(r.ok ? `対抗装置「${r.stage.name}」が完成した` : r.error, !r.ok);
+    if (r.ok) react("build");
   },
   buyShares(el) {
     const r = game.buyShares(Number(el.dataset.n));
@@ -1580,7 +1834,8 @@ const actions = {
   },
   declare() {
     const warn = game.deviceComplete() ? "" : `\n\n★対抗装置が${game.deviceStage ? "未完成" : "ありません"}。${deviceMissingText()}。とても不利な戦いになります。`;
-    if (!confirm(`決戦に進みますか？\nFXのポジションはすべて決済され、ドゥームズデイまで${game.daysLeft}日進みます。${warn}`)) return;
+    const cost = upkeepNote(game.daysLeft);
+    if (!confirm(`決戦に進みますか？\nFXのポジションはすべて決済され、ドゥームズデイまで${game.daysLeft}日進みます。${cost ? `\n${cost}` : ""}${warn}`)) return;
     const r = game.declareFinal();
     if (!r.ok) return toast(r.error, true);
     ui.tab = "final";
@@ -1592,6 +1847,8 @@ const actions = {
     render();
   },
   toTitle() {
+    if (game && !game.over) saveGame();
+    hideReaction();
     ui.view = "title";
     render();
   },
@@ -1629,9 +1886,16 @@ const actions = {
     afterTimePass(r, travel ? `${n}日進めた（${formatJa(game.date)}）` : `${n}日訓練した（${formatJa(game.date)}）`);
   },
   arrive() {
+    const t = game.travel;
+    const start = game.date;
     const r = game.waitUntilArrival();
     if (!r.ok) return toast(r.error, true);
-    afterTimePass(r, `${game.city.name}に到着した（${formatJa(game.date)}）`);
+    // 日数を飛ばして着くときは、こよみ（ちびキャラ）が地図の上を走る演出を出す。
+    // ポジションがあって値動きを再生するときは、その画面の中で並べて同時に動かす
+    const label = `${game.city.name}に到着した（${formatJa(game.date)}）`;
+    const travel = t && !game.over ? { from: t.from, to: game.cityId } : null;
+    if (travel && !willPlayPass(r)) playTravel(t.from, game.cityId, start, game.date, () => afterTimePass(r, label));
+    else afterTimePass(r, label, null, null, travel);
   },
   buyAmmo(el) {
     const r = game.buyAmmo(el.dataset.type, Number(el.dataset.n));
@@ -1659,24 +1923,27 @@ const actions = {
   hire(el) {
     const r = game.hire(el.dataset.id);
     toast(r.ok ? `${r.member.name}が仲間になった` : r.error, !r.ok);
+    if (r.ok) react("hire");
   },
   dismiss(el) {
     const m = game.members.find((x) => x.id === el.dataset.id);
-    if (!m || !confirm(`${m.name}を解雇しますか？`)) return;
+    if (!m) return;
+    const pay = game.severanceYen(m);
+    if (!confirm(`${m.name}を解雇しますか？\n退職金（日給の${CONFIG.party.severanceDays}日分${m.arrearsLocal ? "＋未払いの日給" : ""}）：${yen(pay)}\n持っていた銃は予備に残ります。`)) return;
     const r = game.dismiss(el.dataset.id);
-    toast(r.ok ? `${m.name}を解雇した` : r.error, !r.ok);
+    toast(r.ok ? `${m.name}を解雇した（退職金 ${yen(r.severance)}）` : r.error, !r.ok);
   },
   scout(el) {
     const r = game.scout(el.dataset.key);
     if (!r.ok) return toast(r.error, true);
-    afterTimePass(r, `偵察を終えた（${formatJa(game.date)}）。敵の編成が分かった${r.hint ? `\n噂：${r.hint.text}` : ""}`);
+    afterTimePass(r, `偵察を終えた（${formatJa(game.date)}）。敵の編成が分かった${r.hint ? `\n噂：${r.hint.text}` : ""}`, null, "scout");
   },
   // 出撃準備の画面から偵察して、そのまま準備の画面に戻る
   scoutFromPrep(el) {
     const r = game.scout(el.dataset.key);
     if (!r.ok) return toast(r.error, true);
     ui.prep = { key: el.dataset.key, prediction: null };
-    afterTimePass(r, `偵察を終えた（${formatJa(game.date)}）。敵の編成が分かった${r.hint ? `\n噂：${r.hint.text}` : ""}`, "prep");
+    afterTimePass(r, `偵察を終えた（${formatJa(game.date)}）。敵の編成が分かった${r.hint ? `\n噂：${r.hint.text}` : ""}`, "prep", "scout");
   },
   prep(el) {
     ui.prep = { key: el.dataset.key, prediction: null };
@@ -1725,6 +1992,7 @@ const actions = {
     if (!r.ok) return toast(r.error, true);
     const p = r.position;
     toast(`${pair(p.ccy)}を${p.units.toLocaleString()}${side === "buy" ? "買った" : "売った"}（${px(p.entryPrice)}）`);
+    react(side === "buy" ? "buy" : "sell");
   },
   // 損切りまでの値幅と、資金の何%まで失ってよいかから、数量を逆算する（入力欄に入れるだけ。変えてよい）
   riskUnits(el) {
@@ -1754,6 +2022,7 @@ const actions = {
       return render();
     }
     toast(`決済した（${signedYen(r.pnl)}）`);
+    react(r.pnl > 0 ? "closeWin" : "closeLoss");
   },
   editOrders(el) {
     const id = Number(el.dataset.id);
@@ -1825,13 +2094,18 @@ document.addEventListener("change", (e) => {
 });
 document.addEventListener("input", (e) => {
   const el = e.target;
+  if (el.id === "trainDays") {
+    const n = Math.floor(Number(el.value));
+    const note = $("upkeepNote");
+    if (note) note.textContent = n >= 1 ? upkeepNote(Math.min(n, Math.max(1, game.daysLeft))) : "";
+  }
   if (el.dataset.fx) {
     ui.fx[el.dataset.fx] = el.value;
     updateOrderPreview();
   }
 });
 window.addEventListener("resize", () => {
-  if (ui.view === "main" && ui.tab === "fx") drawHistory($("fxChart"), game.market, ui.fx.ccy, game.date);
+  if (ui.view === "main" && ui.tab === "fx") drawHistory($("fxChart"), game.market, ui.fx.ccy, game.date, CONFIG.fx.historyDays);
 });
 
 boot();

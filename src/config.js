@@ -79,6 +79,7 @@ export const CONFIG = {
   // ── FX口座 ──
   fx: {
     losscutRatio: 0.8, // 証拠金維持率がこれ未満でロスカット（0.8 = 80%）
+    historyDays: 7, // FX口座のチャートに出す、直近の営業日の数
     minUnits: 1000, // 最小取引数量（通貨単位）
     unitStep: 1000, // 数量の刻み
     // スワップの非対称性：受け取りは控えめ、支払いは重め（両建てで利息だけ得るのを防ぐ）
@@ -134,8 +135,8 @@ export const CONFIG = {
   levels: {
     enemyGrowth: 1.15,
     allyGrowth: 1.155,
-    member: { maxLevel: 15, accuracy: 0.004, evade: 0.003, speed: 0.997 }, // 1レベルごと：命中+0.4%、回避+0.3%、撃つ間隔×0.997
-    weapon: { maxLevel: 15, basePrice: 60, growth: 1.32 }, // 強化の値段（基準の値段）= basePrice × growth^(いまのLv-1) × 銃の格（price÷300 の平方根）
+    member: { maxLevel: 25, accuracy: 0.004, evade: 0.003, speed: 0.997 }, // 1レベルごと：命中+0.4%、回避+0.3%、撃つ間隔×0.997
+    weapon: { maxLevel: 25, basePrice: 60, growth: 1.32 }, // 強化の値段（基準の値段）= basePrice × growth^(いまのLv-1) × 銃の格（price÷300 の平方根）
     // 任務の敵のレベル = 1 + 周回の進み具合 × perRun ＋ 規模ごとの補正 ＋ ばらつき（-1〜+1）
     mission: { perRun: 10, tierOffset: { 1: -1, 2: 0, 3: 1 }, special: 1, spread: [-1, 0, 0, 1], max: 15 },
     rewardPerLevel: 0.07, // 報酬 ×（1 ＋ これ ×（Lv-1））
@@ -198,6 +199,11 @@ export const CONFIG = {
       name: "焼夷放射器", rare: true, damage: 17, interval: 0.22, targets: 3, ammoAs: "incendiary",
       rows: ["front"], splash: 0.8, desc: "前列専用。通常弾でも焼夷弾として効き、3体にまとめて当たる（2体目以降は8割）",
     },
+    // 株主優待で届く、研究所の試作品（店では買えない）
+    prototype: {
+      name: "試作位相銃", rare: true, damage: 15, interval: 0.22, targets: 1, accuracy: 0.92, pierce: 0.9,
+      desc: "研究所の試作品（株主優待で届く）。よく当たり、どの弾でも、効きにくい相手への攻撃力がほとんど落ちない",
+    },
     resonator: {
       name: "共鳴砲", rare: true, damage: 40, interval: 0.7, targets: 1, accuracy: 0.92, ammoAs: "resonance", pierce: 0.85,
       desc: "通常弾でも共鳴弾として効く。よく当たり、効きにくい相手にも攻撃力があまり落ちない",
@@ -206,14 +212,16 @@ export const CONFIG = {
 
   // 役割。reduction は受けるダメージの軽減率、taunt は前列を狙う敵に狙われやすさ
   // 衛生兵は、体力が healBelow 未満の仲間がいるとき、医薬品を1個使って heal だけ回復する
-  // wage は日給（基準の値段。雇った都市の通貨で毎日払う）、weapons は雇ったときに持っている銃の候補
+  // wage は日給（基準の値段。雇った都市の通貨で毎日払う。2026-11-02に約1.75倍に上げた。射手の56は、東京で6,160円）
+  // weapons は雇ったときに持っている銃の候補
   // name は役割の名前、note は雇用候補・部隊に出る補足（なしは出さない）
   roles: {
     hero: { name: "観測者", note: "残滓を観測・固定する", hp: 200, damage: 1.3 }, // こよみは体力と攻撃力が高め（最序盤に1〜2人雇えば小規模の任務に勝てるように）
-    shooter: { name: "射手", hp: 100, wage: 32, weapons: ["rifle", "shotgun", "sniper"] },
-    tank: { name: "盾役", note: "前列で敵を引きつける", hp: 220, reduction: 0.4, taunt: 0.7, wage: 36, weapons: ["handgun", "shotgun"] },
-    medic: { name: "衛生兵", note: "医薬品で仲間を回復", hp: 90, heal: 35, healInterval: 1.5, healBelow: 0.7, wage: 36, weapons: ["handgun"] },
-    scout: { name: "斥候", note: "偵察が早くなる、攻撃をかわす", hp: 90, evade: 0.15, wage: 26, weapons: ["handgun"] },
+    // 射手：特効の弾が当たると、攻撃力がさらに counterBonus 倍（弾の選び方が上手い役割）
+    shooter: { name: "射手", note: "弱点を突く：特効の弾の攻撃力がさらに1.25倍", hp: 100, counterBonus: 1.25, wage: 56, weapons: ["rifle", "shotgun", "sniper"] },
+    tank: { name: "盾役", note: "前列で敵を引きつける", hp: 220, reduction: 0.4, taunt: 0.7, wage: 63, weapons: ["handgun", "shotgun"] },
+    medic: { name: "衛生兵", note: "医薬品で仲間を回復", hp: 90, heal: 35, healInterval: 1.5, healBelow: 0.7, wage: 63, weapons: ["handgun"] },
+    scout: { name: "斥候", note: "偵察が早くなる、攻撃をかわす", hp: 90, evade: 0.15, wage: 45, weapons: ["handgun"] },
   },
 
   // 仲間の特性。数字は倍率（hp: 1.25 = 体力1.25倍）か、足し算（accuracy: 0.08 = 命中率+8%）
@@ -239,7 +247,7 @@ export const CONFIG = {
     maxRoster: 10, // 雇える人数の上限（主人公を含む）。編成に入らない仲間も日給はかかる
     // 雇用候補のLv＝仲間の平均Lv ＋ ばらつき（hireLevelSpread から選ぶ）。日給は ×（1 ＋ wagePerLevel ×（Lv-1））
     hireLevelSpread: [-2, -1, -1, 0, 0, 1],
-    wagePerLevel: 0.1,
+    wagePerLevel: 0.05, // 2026-11-02：日給の元の値を上げたので、Lvによる上がり方は0.1→0.05に
     heroWeapon: "rifle", // 主人公が最初に持っている銃
     startCandidates: ["tank", "medic"], // 最初の都市の最初の週の雇用候補（残りはランダム）
     ageRange: [18, 35], // 雇用候補の年齢（生まれた年代で名前を選ぶ）
@@ -249,6 +257,7 @@ export const CONFIG = {
     candidateRefreshDays: 7, // 雇用候補が入れ替わる間隔（日）
     origins: ["元軍人", "民間の警備員", "研究者", "元警察官", "傭兵"], // 仲間の出自（表示用）
     traitCount: [1, 2], // 仲間が持つ特性の数（最小・最大）
+    severanceDays: 10, // 解雇するときの退職金：いまの日給のこの日数分（雇った都市の通貨で。未払いの日給があれば、それも払う）
     scoutDays: 2, // 偵察にかかる日数
     scoutDaysWithScout: 1, // 斥候がいるときの偵察の日数
     wageGraceDays: 3, // 日給の未払いがこの日数続くと、その仲間は去る
@@ -257,16 +266,20 @@ export const CONFIG = {
     heroWipeInjuryDays: 3, // こよみが倒れたとき、回復するまでの日数
     // 訓練：町で待機・偵察する日に、1日あたり fee ×（いまのLv）（基準の値段）を払う。daysPerLevel 日でLvが1上がる
     //   出撃した日も、出た仲間は sortieXp 日分の訓練になる（お金はかからない）
-    training: { fee: 11, daysPerLevel: 3, sortieXp: 0.25 },
+    //   2026-11-02：お金が決戦の強さに効くよう、町の訓練を「値段×2・効果×3」にした（fee 11→22、daysPerLevel 3→1）。
+    //   出撃の経験でのLvの上がり方は変えない（sortieXp 0.25→1/12。daysPerLevel が1/3になったぶん）
+    training: { fee: 22, daysPerLevel: 1, sortieXp: 1 / 12 },
     retreatRewardShare: 0.5, // 途中で撤退したとき、突破した戦闘の割合 × これだけ報酬を受け取る
   },
 
   // ── 手がかり（FXの判断材料） ──
   hints: {
-    // 偵察すると、その都市の通貨の、この先 days 日の向きの噂が聞ける（accuracy の確率で正しい）
+    // 偵察すると、その都市の通貨の、この先 days 日の向きの噂が聞ける（accuracy の確率で正しい。観測レンズで上がる：lens[].scoutAccuracy）
     scout: { days: 7, accuracy: 0.85 },
-    // 東京で情報を集める（週に1度、takeDays 日）：円全体の、この先 days 日の向き（4通貨の平均）の噂
-    tokyo: { days: 7, accuracy: 0.8, takeDays: 1 },
+    // 東京で情報を集める（takeDays 日）：4通貨のうち、この先 days 日で一番大きく動く通貨と、その向きの噂（向きは accuracy の確率で正しい）
+    //   一度集めると、cooldownDays 日たつまで新しい噂は入らない。strongMove 以上動くなら「大きく」
+    //   2026-11-02：円全体の向き（7日・80%・週に1度）から変えた。クールタイム10日ではFXだけで東京に居続ける戦略が46%クリアしたので15日に
+    tokyo: { days: 10, accuracy: 0.85, takeDays: 1, cooldownDays: 15, strongMove: 0.02 },
     // 記憶の断片：周回の期間に、相場を動かした実際の出来事があると、recallChance の確率で思い出す（src/data/events.js）
     //   思い出したものは正確（何が起き、どの通貨がどちらに動いたか）。時期は旬（上旬・中旬・下旬）まで
     //   recallDays: 出来事のこの日数前に思い出す。effectDays: 出来事の前日から何日後までの値動きを「影響」とするか
@@ -285,17 +298,18 @@ export const CONFIG = {
       { lens: 3, offset: 10, everyDays: 12 },
     ],
     // 特異な残滓の種類。lens：観測できるようになる観測レンズの強化回数（0は最初から）
-    //   rewardMult：売却額の倍率（なしは1倍）、weapon：その都市の特殊な銃が手に入る、levelBonus：敵のLvの上乗せ
+    //   rewardMult：売却額の倍率（売却額そのものが見返りの種類だけ。なしは1倍）、weapon：その都市の特殊な銃が手に入る、levelBonus：敵のLvの上乗せ
     //   feathers：勝つと手に入る位相残晶の数の範囲（現れたときに決まる。これがない種類では位相残晶は手に入らない）
-    //   xp：勝つと、出撃した仲間（こよみも）が得る経験（訓練の日数。3日でLv1つ）
+    //   xp：勝つと、出撃した仲間（こよみも）が得る経験（訓練の日数。party.training.daysPerLevel 日でLv1つ）
     //   現れたときに、観測できる種類から等しい確率で決まる（特殊な銃は、その都市の銃をまだ持っていないときだけ）
     //   レンズで増える種類は、それぞれの報酬がある（強化したほうが得）
+    //   2026-11-02：売却額の倍率は黄金の残滓だけにした（ほかは見返りが別にあるので）
     kinds: {
       cash: { name: "黄金の残滓", lens: 0, rewardMult: 1.3, desc: "売却額が大きい" },
-      rare: { name: "鉄火痕の残滓", lens: 1, rewardMult: 1.5, weapon: true, desc: "売却額が大きく、倒すと残留物から作られた特殊な銃が手に入る" },
-      echo: { name: "群星の残滓", lens: 1, rewardMult: 1.5, xp: 3, desc: "売却額が大きく、戦った仲間が成長する（全員Lv1つ分の経験）" },
+      rare: { name: "鉄火痕の残滓", lens: 1, weapon: true, desc: "倒すと残留物から作られた特殊な銃が手に入る" },
+      echo: { name: "群星の残滓", lens: 1, xp: 1, desc: "戦った仲間が成長する（全員Lv1つ分の経験）" },
       crystal: { name: "凝相の残滓", lens: 2, feathers: [12, 18], desc: "位相残晶がまとめて手に入る" },
-      pure: { name: "高純度の残滓", lens: 3, rewardMult: 3.0, levelBonus: 2, xp: 6, desc: "売却額がとても大きく、戦った仲間が大きく成長する（Lv2つ分）。ただし敵がとても強い" },
+      pure: { name: "高純度の残滓", lens: 3, levelBonus: 2, xp: 2, desc: "戦った仲間が大きく成長する（Lv2つ分）。ただし敵がとても強い（そのぶん売却額も大きい）" },
     },
     strength: 1.0, // 敵の重さの倍率（大規模の任務を基準に）。敵のレベルは大規模より levels.mission.special だけ高い
   },
@@ -338,25 +352,28 @@ export const CONFIG = {
     },
   },
 
-  // 観測レンズ（東京で強化する）。段階が上がるほど、観測できる特異な残滓の種類が増える
+  // 観測レンズ（東京で強化する）。段階が上がるほど、観測できる特異な残滓の種類が増え、
+  //   すべての探索（特異な残滓も）の回収品の売却額と、位相残晶の数が増える
   //   lensBaseName：最初から持っているレンズ（1段階目）の名前。lens：強化先（2段階目〜）
   lensBaseName: "観測レンズ Mk.I",
   lens: [
     // yen：費用（円）、feathers：使う位相残晶の数
-    { name: "観測レンズ Mk.II", yen: 40_000, feathers: 2 },
-    { name: "観測レンズ Mk.III", yen: 80_000, feathers: 4 },
-    { name: "観測レンズ Mk.IV", yen: 150_000, feathers: 6 },
+    // rewardBonus：売却額の上乗せ（0.1 = +10%）、featherBonus：位相残晶の上乗せ（確実に拾う数と、1日ごとの上乗せの確率に掛かる。凝相の残滓の数にも）
+    // scoutAccuracy：偵察で聞く噂の確からしさ（最初のレンズは hints.scout.accuracy）
+    { name: "観測レンズ Mk.II", yen: 40_000, feathers: 2, rewardBonus: 0.1, featherBonus: 0.15, scoutAccuracy: 0.88 },
+    { name: "観測レンズ Mk.III", yen: 80_000, feathers: 4, rewardBonus: 0.2, featherBonus: 0.3, scoutAccuracy: 0.92 },
+    { name: "観測レンズ Mk.IV", yen: 150_000, feathers: 6, rewardBonus: 0.3, featherBonus: 0.5, scoutAccuracy: 0.96 },
   ],
 
   // ── 決戦・クリア条件（自動プレイで調整する） ──
   endgame: {
     // 位相残晶（対抗装置・観測レンズの素材）：特異な残滓以外の探索に勝つと手に入る
-    //   最低保証 = 日数 × perDay（切り上げ）。さらに1日ごとに bonusChance の確率で1個上乗せ
-    //   最低保証だけでも、120日すべてを探索に使えば48個以上（装置に必要なのは45個）
+    //   最低保証 = 日数 × perDay × レンズの補正（切り上げ）。さらに1日ごとに bonusChance × レンズの補正 の確率で1個上乗せ
     //   特異な残滓では、凝相の残滓（specials.kinds.crystal.feathers）を除いて手に入らない
+    //   2026-11-02：レンズの補正を入れたので、元の値を下げた（0.5→0.4、30%→25%）
     feathers: {
-      perDay: { 1: 0.5, 2: 0.5, 3: 0.5 },
-      bonusChance: 0.3, // 2026-10-30：35%→30%に下げた
+      perDay: { 1: 0.4, 2: 0.4, 3: 0.4 },
+      bonusChance: 0.25,
     },
     // 対抗装置：段階ごとにブラックスワンへの備えが増える（なくても挑めるが、とても不利）。研究室で頼むとその場で完成する
     //   段階ごとの建造費（円）と必要な位相残晶。お金はほとんどかからず、位相残晶（敵を倒さないと手に入らない）が主
@@ -379,25 +396,30 @@ export const CONFIG = {
     ],
     // 対抗装置がないときの決戦の規則
     bossRulesBase: { specialAmmo: false, regen: true, targetAny: false, damageTaken: 0.5 },
-    // 研究財団の株式（資金ルート）。1%ずつ買う。1%の値段 = firstPrice × 期間の補正 × 節目の倍率
+    // 研究所の株式（資金ルート）。1%ずつ買う。1%の値段 = firstPrice × 期間の補正 × 節目の倍率
     //   steps：保有比率が at% に届くと、それ以降の値段が mult 倍になる（重ねて掛かる）
     shares: {
-      foundation: "東亜先端技術研究財団", // ストーリーで使う正式名（画面では「財団」と略す）
-      research: "未実現可能性の現実固着研究", // 財団の研究の名前（ブラックスワン顕現の原因。ストーリー・資金ルートのエンディングで使う）
-      firstPrice: 18_000,
+      foundation: "株式会社東亜ホールディングス先端技術研究所", // ストーリーで使う正式名
+      shortName: "研究所", // 画面での略称（「研究所の株式」など）
+      research: "未実現可能性の現実固着研究", // 研究所の研究の名前（ブラックスワン顕現の原因。ストーリー・資金ルートのエンディングで使う）
+      firstPrice: 22_400, // 2026-11-02：1.8万→2万円。2026-11-03：FXだけで過半数に届きすぎたため2.24万円に（ボスLvを1下げる値段は2万円のときの1.12倍）。あわせて30%の節目の倍率 2.5→3.5
       steps: [
         { at: 5, mult: 1.5, title: "大量保有報告書", text: "保有が5%を超え、大量保有報告書を出した。買い集めが市場に知られ、株価が上がった" },
-        { at: 30, mult: 2.5, title: "公開買付け", text: "30%を超えた後は公開買付けが必要になる。市場の値段にプレミアムを上乗せして買い取る" },
+        { at: 30, mult: 3.5, title: "公開買付け", text: "30%を超えた後は公開買付けが必要になる。市場の値段にプレミアムを上乗せして買い取る" },
       ],
       majority: 51, // これ以上でクリア（画面には出さない隠し条件）
       // 期間の補正：周回の期間に相場が大きく動いた（稼ぎやすい）ほど値段を上げる
       // 補正 = 1 + trendFactor × （4通貨のうち、期間中の変化率が一番大きいものの絶対値）
       trendFactor: 1.5,
-      // 配当：毎月1日に、株式に払った額の dividendMonthly を受け取る
+      // 時期の補正：研究が進むほど株価が上がる。値段 ×（1 ＋ priceGrowth × 周回の進み具合）。期日には ×1.3（早く買うほど安い）
+      priceGrowth: 0.3,
+      // 配当：毎月1日に、株式に払った額の dividendMonthly を受け取る（年12%。現実の配当より高めなので、これ以上は上げない）
       dividendMonthly: 0.01,
       // 株主優待：保有比率に応じて、造兵廠（弾・医薬品・銃）の割引と、毎月1日の現物の配当（銃の強化は割引にならない）
+      //   weapon：その段階に届いたとき、一度だけ現物で届く銃（Lvはそのときの敵の基準Lv）
       perks: [
         { at: 5, discount: 0.05, gift: { medkit: 10 } },
+        { at: 10, discount: 0.08, gift: { medkit: 12 }, weapon: "prototype" },
         { at: 15, discount: 0.1, gift: { medkit: 15, resonance: 100 } },
         { at: 30, discount: 0.15, gift: { medkit: 20, resonance: 200, ap: 200 } },
       ],
@@ -411,18 +433,28 @@ export const CONFIG = {
     stageRecovery: 0.25, // 形態と形態の間の回復
     // ブラックスワン（取り巻きを含む）のレベル。そのままでは勝てない高さで、株式を持つと研究が遅れて下がる
     //   想定：株式を20〜30%持ち（資金ルートの過半数には遠い）、部隊をLv14前後まで鍛えて、ちょうど戦える
-    bossLevel: 18,
+    bossLevel: 20, // 2026-11-02：18→19（FXなしのクリア率を下げるため）。2026-11-03：キリよく20に（強さは bossScale で19のときと同じ）
+    // ブラックスワン（取り巻きを含む）の体力・攻撃力の倍率。1 / enemyGrowth で、Lvが1つ下のときと同じ強さになる
+    bossScale: 1 / 1.15,
     sharesPerBossLevel: 5, // 株式を何%買うごとに、ボスのレベルが1下がるか（買った量の合計で数える。上限なし）
-    // 決戦に持っていく弾・医薬品の目安（決戦の画面に出す）
+    // 決戦に持っていく弾の目安（決戦タブに出す）：game.finalAmmoGuide() が、仲間は傷つかないものとして、いまの部隊・銃・ボスのLv・
+    //   対抗装置で3つの形態を倒しきるまで guideRuns 回戦わせ、guideCover の割合の回が足りる量（勝ち負けは出さない）
+    //   guideSeconds 秒で倒しきれない回が多いとき、またはどれかの弾が guideMax 発を超えるときは「推測不能」
+    guideRuns: 30,
+    guideCover: 0.8,
+    guideSeconds: 300,
+    guideMax: 9900,
+    // 決戦に持っていく弾・医薬品の固定の目安（これまでの自動プレイ tools/bots.js の決戦の準備だけで使う。画面には出さない）
     ammoGuide: { normal: 1500, ap: 1600, incendiary: 1100, resonance: 1000, medkit: 60 },
   },
 
   // 任務の規模。中身はランダム：stageCount は戦闘の回数、stageBudget は1戦ごとの敵の重さ、days は日数の範囲
-  // 報酬（基準の値段）＝ rewardPerPoint × 敵の重さの合計 ×（日数 ÷ 最短の日数）^0.5（現地では priceFactor を掛ける）
+  // 報酬（基準の値段）＝ rewardPerPoint × 敵の重さの合計 ×（日数 ÷ 最短の日数）^0.5 × レンズの補正（現地では priceFactor を掛ける）
+  // 2026-11-02：日給を上げたので元の値も1.3倍にした（日給に対する割合では下げ、レンズで取り戻す形）
   missionTiers: [
-    { tier: 1, name: "小規模", stageCount: [1, 1], stageBudget: [260, 340], days: [2, 3], rewardPerPoint: 1.75 },
-    { tier: 2, name: "中規模", stageCount: [1, 2], stageBudget: [400, 520], days: [3, 6], rewardPerPoint: 1.4 },
-    { tier: 3, name: "大規模", stageCount: [2, 3], stageBudget: [450, 600], days: [6, 10], rewardPerPoint: 1.62 },
+    { tier: 1, name: "小規模", stageCount: [1, 1], stageBudget: [260, 340], days: [2, 3], rewardPerPoint: 2.28 },
+    { tier: 2, name: "中規模", stageCount: [1, 2], stageBudget: [400, 520], days: [3, 6], rewardPerPoint: 1.82 },
+    { tier: 3, name: "大規模", stageCount: [2, 3], stageBudget: [450, 600], days: [6, 10], rewardPerPoint: 2.1 },
   ],
 
   // ── 相場 ──
@@ -436,6 +468,67 @@ export const CONFIG = {
   // ── データ ──
   data: {
     ratesUrl: "data/rates.json",
+    newsUrl: "data/news.json", // 画面の端に流すニュース（tools/fetch-news.html で作る。なければニュースは出ない）
+  },
+
+  // ── 画面の端に流すニュース（世界観の演出。src/ui/news.js） ──
+  //   ゲーム内の日付の、実際の出来事（ウィキペディア日本語版の年・日付の記事から）を、日付（M/D）を付けて画面の下の端に流し続ける。
+  //   ゲーム内の日付より後の出来事は、決して出さない
+  //   minItems：その日の出来事がこれより少ないときだけ、前日、2日前、3日前（lookbackDays 日前まで）の出来事を足す。
+  //     それでも足りなくても、それ以上は遡らず、ほかのもので補わない。取得ツールの記録の「足りない日」も、この数で数える
+  //     目安：1件は40〜60字。speed（1秒あたりの画素）42 で、スマホの幅では1件が約15秒で流れる
+  //   listPerDay：一覧から作った項目（番組の開始・終了、曲の発売など）は、1日にこの数まで（足りないときだけ残りも流す）
+  //   gap：項目と項目のあいだ（画素）
+  news: {
+    minItems: 3,
+    lookbackDays: 3,
+    listPerDay: 3,
+    speed: 42,
+    gap: 56,
+  },
+
+  // ── 画面で使う絵 ──
+  ui: {
+    gameTitle: "BLACK SWAN", // タイトル画面・ゲーム画面の最上部に出す作品名
+    version: "1.0.0", // 版（画面には出さない）。オフライン用の保存（sw.js の VERSION）と同じ値にする
+    // 免責事項（タイトル画面の「免責事項」で開く。1要素が1段落）
+    disclaimer: [
+      "本作は、現実の歴史・経済・金融市場等を題材の一部としたフィクションです。実在する地名、通貨、企業、団体、出来事、過去の市場データ等が登場する場合がありますが、物語、登場人物およびゲーム上の設定には創作・脚色が含まれます。",
+      "本作には、外国為替証拠金取引（FX）や株式取引を題材としたゲームシステムが含まれています。これらはゲームとして簡略化・調整されており、実際の取引を完全に再現するものではありません。また、本作に含まれる情報は、特定の金融商品について投資を推奨し、または投資判断に関する助言を行うことを目的としたものではありません。",
+      "実際のFXその他の金融取引には、価格・為替・金利の変動やレバレッジ等により損失が生じるリスクがあり、取引の条件によっては預け入れた資金を超える損失が発生する場合があります。",
+      "ゲーム内に登場する相場、ニュース、経済事象、取引条件、損益その他の情報には、ゲーム上の演出・調整・創作が含まれる場合があります。実際の投資判断には使用せず、実際の取引はご自身の判断と責任において行ってください。",
+    ],
+    // 出典（タイトル画面の「出典」と、ニュースの帯の「出典」で開く）。title：見出し、text：本文（1要素が1段落）、links：[表示, URL]
+    //   ニュースの記事名の一覧は、data/news.json の pages から自動で足す
+    credits: [
+      {
+        title: "画面の端に流れるニュース",
+        text: [
+          "ウィキペディア日本語版の各記事（年の記事「○○年」、日付の記事「○月○日」、「○○年のスポーツ」など）の「できごと」から作成しています。",
+          "文章はクリエイティブ・コモンズ 表示-継承 4.0 国際（CC BY-SA 4.0）で提供されています。ゲームに合わせて、文の一部を省略し、文末を見出しの形にそろえ、出来事の名前（後から付けられた事件・災害の名前など）を中身の説明に置き換えるなどの改変をしています。改変した文章も CC BY-SA 4.0 です。",
+          "記事の執筆者は、各記事の履歴から確認できます。",
+          "出来事の少ない日には、英語版ウィキペディアや公的機関・報道の記録で日付を確かめた出来事を、短い文で書き足しています。",
+        ],
+        links: [
+          ["ウィキペディア日本語版", "https://ja.wikipedia.org/"],
+          ["CC BY-SA 4.0 の内容", "https://creativecommons.org/licenses/by-sa/4.0/deed.ja"],
+        ],
+      },
+      {
+        title: "為替レート",
+        text: ["欧州中央銀行（ECB）の参考レートを、Frankfurter API を通じて取得しています。"],
+        links: [["Frankfurter", "https://frankfurter.dev/"]],
+      },
+      {
+        title: "世界地図",
+        text: ["陸地の形は Natural Earth（パブリックドメイン）のデータを、world-atlas を通じて使っています。"],
+        links: [["Natural Earth", "https://www.naturalearthdata.com/"]],
+      },
+    ],
+    heroPortrait: "assets/portraits/koyomi/normal.webp", // 部隊タブのこよみの立ち絵
+    // 移動の演出のちびキャラ（東へ＝右へ進むときは right、西へ＝左へ進むときは left）
+    travelChibi: { right: "assets/chibi/koyomi/run_right.webp", left: "assets/chibi/koyomi/run_left.webp" },
+    travelMs: 2200, // 移動の演出の長さ（ミリ秒。押すと飛ばせる）
   },
 
   // ── ストーリー（会話の画面）。台本は src/data/story.js、絵は assets/ ──

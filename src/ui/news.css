@@ -1,0 +1,23 @@
+/* 画面の端に流すニュース（src/ui/news.js）。目立たないよう、小さく暗い文字で、タブのすぐ上に流す */
+
+:root { --news-h: 0px; }
+
+.news-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 4; height: 22px; pointer-events: none;
+  background: linear-gradient(rgba(10, 14, 11, .6), rgba(10, 14, 11, .92)); border-top: 1px solid rgba(29, 41, 33, .8); }
+.news-lane { position: relative; width: min(560px, 100%); height: 100%; margin: 0 auto; overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18px, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 18px, #000 calc(100% - 18px), transparent); }
+.news-track { position: absolute; left: 0; top: 0; height: 100%; display: flex; align-items: center; white-space: nowrap; will-change: transform; }
+.news-item { flex: none; margin-right: var(--news-gap, 56px); font-size: 11px; line-height: 22px; color: var(--muted); letter-spacing: .02em; }
+.news-date { margin-right: 7px; color: #4f6657; font-variant-numeric: tabular-nums; }
+.news-item.k-jp .news-date { color: #6b7d52; } /* 日本の出来事は、日付だけごく薄く色を変える */
+
+/* こよみの反応は、ニュースの帯の上に出す（style.css の .reaction を上書き） */
+.reaction { bottom: calc(var(--tabs-h, 0px) + var(--news-h, 0px) + 8px); }
+
+/* 出典（タイトル画面の「出典」から開く。見た目は設定資料集と同じ .lore） */
+.lore-body.credits h2 { margin-top: 20px; }
+.lore-body.credits a { color: var(--blue); }
+.lore-body.credits details { border-bottom: none; }
+.lore-body.credits summary { font-size: 13px; color: var(--muted); }
+.credit-pages { font-size: 12px !important; line-height: 2 !important; }

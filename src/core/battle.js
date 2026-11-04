@@ -23,6 +23,7 @@
 //   enemyScale?: 1,                           … 敵の体力・攻撃力の倍率（調整用）
 //   bossRules?: { specialAmmo, regen, targetAny, damageTaken } … 決戦のブラックスワン（boss: true の敵）にだけ効く規則（対抗装置の段階で変わる）
 //   field?: { special, regen, weakest, damage }   … 対抗装置の、ブラックスワン以外への小さな効果（特効の倍率・再生の倍率・弱った仲間を狙う確率・攻撃力の倍率）
+//   invulnerable?: false                      … 仲間が傷つかない（決戦の目安の試算用：倒しきるまでに要る弾の数を数える）
 // }
 //
 // 結果の outcome: "win"（勝利）/ "retreat"（撤退）/ "wipe"（全滅）/ "timeout"（時間切れ）
@@ -42,6 +43,7 @@ export class Battle {
     this.policy = setup.policy || "smart";
     this.retreatLine = setup.retreatLine ?? 0;
     this.bossRules = setup.bossRules ?? null;
+    this.invulnerable = !!setup.invulnerable;
     this.field = { special: 1, regen: 1, weakest: 0.6, damage: 1, ...(setup.field ?? {}) };
     this.maxSeconds = setup.maxSeconds ?? config.battle.maxSeconds;
     this.ammo = { ...setup.ammo };
@@ -214,7 +216,8 @@ export class Battle {
       if (w.pierce && mult < w.pierce) mult = w.pierce; // 貫通：効きにくい弾でも、攻撃力がこの割合までしか落ちない
       const splash = ti > 0 ? w.splash ?? 1 : 1; // 2体目以降
       const shell = rules?.damageTaken ?? (target.def.boss ? 1 : this.field.damage); // 殻（ブラックスワン以外には、対抗装置で攻撃力が少し上がる）
-      const dmg = w.damage * st.damage * (w.row?.[a.row] ?? 1) * splash * mult * shell * this.variance() * (crit ? b.crit.multiplier : 1);
+      const counter = mult > 1 ? (a.roleDef?.counterBonus ?? 1) : 1; // 射手：特効の弾が当たると、さらに強い
+      const dmg = w.damage * st.damage * (w.row?.[a.row] ?? 1) * splash * mult * counter * shell * this.variance() * (crit ? b.crit.multiplier : 1);
       this.damageEnemy(a, target, dmg, asAmmo ?? ammoType, mult, crit);
     }
     return interval;
@@ -261,6 +264,7 @@ export class Battle {
   // ── 敵の行動 ──
 
   enemyAttack(e) {
+    if (this.invulnerable) return; // 試算用：仲間は傷つかない
     const target = this.pickAllyTarget(e.def.boss && this.bossRules?.targetAny ? "any" : e.def.target ?? "front");
     if (!target) return;
     const evade = (target.roleDef.evade ?? 0) + target.stats.evade + (target.weaponDef.evade ?? 0);

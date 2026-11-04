@@ -24,7 +24,7 @@ export const STILLS = {
   intro: "assets/stills/intro.webp",
   timeleap: "assets/stills/timeleap.webp",
   victory: "assets/stills/victory.webp", // エンド1：ブラックスワンを倒した
-  stock: "assets/stills/stock.webp", // エンド2：財団の株式の過半数（真エンド）
+  stock: "assets/stills/stock.webp", // エンド2：研究所の株式の過半数（真エンド）
   defeat: "assets/stills/defeat.webp", // エンド3：決戦に敗れた
   bankrupt: "assets/stills/bankrupt.webp", // エンド4：破産
 };
@@ -67,12 +67,12 @@ export const STORY = {
     { tab: "final" },
     { who: "koyomi", face: "serious", text: "ドゥームズデイは{deadlineMD}。それまでに資金を増やして装備を整えないと" },
     { who: "koyomi", face: "thinking", text: "ブラックスワンに対抗するための装置は、そこらにいる「残滓」を倒せば手に入る素材で作れるはず" },
-    { who: "koyomi", face: "side_glance", text: "それか、財団に研究自体やめさせるのもありかも？でもな......" },
+    { who: "koyomi", face: "side_glance", text: "それか、{institute}に研究自体やめさせるのもありかも？でもな......" },
     { who: "ns", text: "ブラックスワンは、{foundation}による「{research}」が失敗した結果、顕現に至ったことがわかっている" },
     { who: "koyomi", face: "sighing", text: "突然一般人の私が行っても相手にしてくれるわけないか" },
     { who: "koyomi", face: "subtle_smile", text: "......株主にでもなれば、多少研究を妨害することくらいできるかな" },
     { who: "system", text: "ドゥームズデイまでに、位相残晶を集めて対抗装置を作り、部隊と武器のレベルを上げて、決戦に備えましょう。" },
-    { who: "system", text: "また、財団の株式を購入することができれば、研究に影響を与えることができるようになり、ブラックスワンを不完全な状態で顕現させることができるかもしれません。" },
+    { who: "system", text: "また、{institute}の株式を購入することができれば、研究に影響を与えることができるようになり、ブラックスワンを不完全な状態で顕現させることができるかもしれません。" },
     { who: "system", text: "過半数を保有できれば、あるいは......？" },
 
     { tab: "town" },
@@ -104,7 +104,7 @@ export const STORY = {
     { tab: "town" },
   ],
 
-  // ── エンディング（いまは地の文だけの仮の文） ──
+  // ── エンディング ──
   // 文の中では、{deadlineDate}（ドゥームズデイの日付）・{endDate}（周回が終わった日）・{daysLeft}（ドゥームズデイまでの残り日数）・
   // {yearsAfter}（滅びまでの年数）も使える
 
@@ -113,13 +113,13 @@ export const STORY = {
     { bg: "black" },
     { who: "ns", text: "{deadlineDate}。東京の空に、ブラックスワンが顕現した。" },
     { bg: "victory" },
-    { who: "ns", text: "観測し、固定し、撃ち抜く。\n未来で積み重ねた敗北の記録は、{lengthDays}日の準備を経て、ひとつの結末に変わった。" },
-    { who: "ns", text: "黒い羽根が舞い落ちる。地面に届く前に、そのひとつひとつが溶けるように消えていく。" },
-    { who: "ns", text: "世界には、まだ爪痕が残っている。それでも、{yearsAfter}年後の滅びは、もう来ない。" },
-    { who: "ns", text: "{hero}の胸の装置は、静かなままだった。" },
+    { who: "ns", text: "まだ世界の誰もが滅びにすら気が付かぬ間に、弾丸が届いた。\n未来で観測した敗北の記録は、{lengthDays}日の準備を経て、ひとつの結末に変わった。" },
+    { who: "ns", text: "黒い羽根が舞い落ちる。そのひとつひとつが溶けるように消えていく。" },
+    { who: "ns", text: "世界には、ブラックスワンと「残滓」の顕現による爪痕が残った。それでも、{yearsAfter}年後の滅びは、もう来ない。" },
+    { who: "ns", text: "その日、{hero}は誰にも語られぬ英雄となった。" },
   ],
 
-  // エンド2：財団の株式の過半数を握った（真エンド）
+  // エンド2：研究所の株式の過半数を握った（真エンド）
   stock: [
     { bg: "black" },
     { who: "ns", text: "{foundation}の株式の過半数が、ひとりの若い株主の手に渡った。" },
@@ -137,17 +137,17 @@ export const STORY = {
     { who: "ns", text: "{deadlineDate}。ブラックスワンは止まらなかった。" },
     { bg: "defeat" },
     { who: "ns", text: "観測を続ける視界が、ゆっくりと赤く滲んでいく。" },
-    { who: "ns", text: "胸の装置は、もう動かない。過去へ戻れるのは、一度きりだった。" },
+    { who: "ns", text: "2度目の世界の終わり。観測者は、その役割を果たせなかった。" },
     { who: "ns", text: "降りしきる黒い羽根の中で、{hero}は最後まで、それを見ていた。" },
   ],
 
   // エンド4：破産
   bankrupt: [
     { bg: "black" },
-    { who: "ns", text: "{endDate}。口座の残高は、ほとんど残っていなかった。" },
+    { who: "koyomi", face: "fx_big_loss", text: "終わった......" },
     { bg: "bankrupt" },
-    { who: "ns", text: "弾も、仲間への日給も、もう払えない。" },
+    { who: "ns", text: "{endDate}。口座の残高は、ほとんど残っていなかった。" },
     { who: "ns", text: "ドゥームズデイまで、あと{daysLeft}日。戦う手段を失った{hero}に、できることはもう何もなかった。" },
-    { who: "ns", text: "お金は、計画的に使おう。" },
+    { who: "ns", text: "金は、命より重い。" },
   ],
 };

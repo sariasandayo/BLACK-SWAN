@@ -12,7 +12,7 @@
 //
 // クリア条件：
 //   戦闘ルート … 期日の決戦でブラックスワンを倒す（決戦に進めば期日まで飛ばせる）。対抗装置の段階ごとに決戦が有利になる
-//   資金ルート … 研究財団の株式の過半数を買い集める（達成した時点でクリア）
+//   資金ルート … 研究所の株式の過半数を買い集める（達成した時点でクリア）
 // ゲームオーバー：決戦での敗北、破産
 //
 // プレイの記録（stats）：行動・購入・収支を数えておき、自動プレイでの分析に使う
@@ -27,7 +27,7 @@ import { allyStats } from "../core/battle.js";
 import { MissionRun } from "../core/mission-run.js";
 import { predict, predictRange } from "../core/prediction.js";
 import { generateMission, plausibleStageSets } from "../core/missions.js";
-import { memoriesFor, eventsInRange, scoutHint, yenHint } from "../core/hints.js";
+import { memoriesFor, eventsInRange, scoutHint, tokyoHint } from "../core/hints.js";
 import { NAMES, FICTIONAL } from "../data/names.js";
 
 // 敵の型ごとの特効弾
@@ -66,12 +66,12 @@ export class Game {
     // 決戦の準備
     this.feathers = 0; // 位相残晶（敵を倒すと手に入る）
     this.deviceStage = 0; // 対抗装置の完成した段階の数
-    this.intelWeeks = []; // 東京で情報を集めた週
+    this.lastIntel = null; // 東京で最後に情報を集めた日（cooldownDays 日たつまで、次の噂は入らない）
     this.lensLevel = 0; // 観測レンズの強化回数（0 は最初のレンズ）
     this.specialKinds = {}; // 特異な残滓の種類（現れたときに決まる） { key: { kind, level } }
     this.candidateProfiles = {}; // 雇用候補の名前・性別・年齢（はじめて出たときに決まる） { 候補id: { name, sex, age } }
     this.usedNames = []; // この周回で一度引いた名前（都市・年代が違っても、二度と引かない）
-    this.shares = 0; // 研究財団の株式の保有比率（%）
+    this.shares = 0; // 研究所の株式の保有比率（%）
     this.sharesPaid = 0; // 株式に払った額の合計（配当の元）
     this.sharesBought = 0; // 買った株式の量の合計（%）。研究の遅れ＝ボスのLvの低下はこれで決まる
     this.periodFactor = this.computePeriodFactor();
@@ -93,7 +93,7 @@ export class Game {
   toSave() {
     const state = {};
     for (const [k, v] of Object.entries(this)) {
-      if (k === "config" || k === "market" || k === "account") continue;
+      if (k === "config" || k === "market" || k === "account" || k === "_guide") continue;
       state[k] = v;
     }
     const a = this.account;
@@ -502,15 +502,33 @@ export class Game {
     return { ok: true, member: this.members[this.members.length - 1] };
   }
 
+  // 解雇するときの退職金（円）：いまの日給の severanceDays 日分＋未払いの日給（雇った都市の通貨を、いまのレートで換算）
+  severanceLocal(m) {
+    return m.wageLocal ? m.wageLocal * (this.config.party.severanceDays ?? 0) + (m.arrearsLocal ?? 0) : 0;
+  }
+
+  severanceYen(m) {
+    return m.wageLocal ? this.payYen(this.severanceLocal(m), m.currency) : 0;
+  }
+
+  // 解雇：退職金を払う（払えなければ解雇できない）。持っていた銃は予備に残る
   dismiss(memberId) {
     const i = this.members.findIndex((x) => x.id === memberId);
     if (i <= 0) return fail(`${this.hero.name}は外せません`);
+    const busy = this.busyReason();
+    if (busy) return fail(busy);
     const m = this.members[i];
+    const pay = this.severanceYen(m);
+    if (pay > 0) {
+      const r = this.account.spend(pay, this.prices(), this.date);
+      if (!r.ok) return fail(`退職金（${yen(pay)}）を払えません`);
+      this.track("spend.severance", pay);
+    }
     this.spareWeapons[m.weapon] = (this.spareWeapons[m.weapon] ?? 0) + 1;
     this.members.splice(i, 1);
     this.track("party.dismiss");
-    this.addLog(`${m.name}を解雇した`);
-    return { ok: true };
+    this.addLog(`${m.name}を解雇した${pay > 0 ? `（退職金 ${yen(pay)}）` : ""}`);
+    return { ok: true, severance: pay };
   }
 
   // 1日あたりの日給の合計（いまのレートでの円換算）
@@ -527,6 +545,32 @@ export class Game {
   // その仲間の1日あたりの訓練費（レベルが上がるほど高い）
   trainingFeeYen(m) {
     return this.yenCost(this.config.party.training.fee * (m.level ?? 1));
+  }
+
+  // この先 days 日、町で訓練したときの訓練費と日給の見込み（円）。画面で、日を進める前に出す
+  //   訓練費はLvが上がるほど高くなるので、途中のLvアップも数える（払えない日は数えない＝多めに出る）
+  upkeepEstimate(days, { training = true } = {}) {
+    const tr = this.config.party.training;
+    const max = this.config.levels.member.maxLevel;
+    let fees = 0;
+    if (training && !this.travel) {
+      for (const m of this.members) {
+        if (!m.training || (m.level ?? 1) >= max) continue;
+        let lv = m.level ?? 1;
+        let progress = m.trainingDays ?? 0;
+        const injured = this.injuryDaysLeft(m);
+        for (let d = 0; d < days && lv < max; d++) {
+          if (d < injured) continue;
+          fees += this.yenCost(tr.fee * lv);
+          progress += 1;
+          while (progress >= tr.daysPerLevel && lv < max) {
+            progress -= tr.daysPerLevel;
+            lv++;
+          }
+        }
+      }
+    }
+    return { training: fees, wages: this.dailyWagesYen() * days, total: fees + this.dailyWagesYen() * days };
   }
 
   // 訓練の進み（days 日分）。レベルが上がった仲間の名前を返す
@@ -636,6 +680,7 @@ export class Game {
     }
     if (acc.wages) this.addLog(`日給 ${yen(acc.wages)}（${days}日分）`);
     if (acc.trainingFees) this.addLog(`訓練費 ${yen(acc.trainingFees)}`);
+    if (acc.trainingUnpaid) this.addLog(`★お金が足りず、訓練できなかった（のべ${acc.trainingUnpaid}人日）`);
     return { frames, events, ...acc };
   }
 
@@ -687,7 +732,12 @@ export class Game {
       for (const m of this.members) {
         if (!m.training || this.isInjured(m)) continue;
         const fee = this.trainingFeeYen(m);
-        if (!this.account.spend(fee, pr, this.date).ok) continue;
+        if (!this.account.spend(fee, pr, this.date).ok) {
+          // 訓練費を払えない日は、その仲間の訓練は進まない（記録には、払えなかった仲間・日数を数える）
+          this.track("train.unpaid");
+          acc.trainingUnpaid = (acc.trainingUnpaid ?? 0) + 1;
+          continue;
+        }
         acc.trainingFees += fee;
         this.track("spend.training", fee);
         this.track("train.days");
@@ -759,32 +809,39 @@ export class Game {
   // ── 任務 ──
 
   // その都市の任務（通常の任務 ＋ 特異な残滓）。敵のレベルは日が経つと上がり、報酬もそれに応じて上がる（出撃した時点で確定）
+  //   売却額と位相残晶には、観測レンズの補正が掛かる（いまのレンズで計算する）
   missions(cityId = this.cityId) {
     if (this.config.cities.find((c) => c.id === cityId)?.noMissions) return []; // 東京には任務がない
     const normal = this.config.missionTiers.map((t) => {
       const gen = this.missionGen[`${cityId}|${t.tier}`] ?? 0;
       const seed = `${this.seed}|${cityId}|${t.tier}|${gen}`;
       const m = generateMission(seed, cityId, t.tier, this.config, { level: this.missionLevel(seed, t.tier) });
-      return { ...m, key: m.seed, scouted: this.scouted.includes(m.seed), feathers: this.missionFeathers(t.tier, m.days) };
+      return { ...m, rewardLocal: this.lensReward(m.rewardLocal), key: m.seed, scouted: this.scouted.includes(m.seed), feathers: this.missionFeathers(t.tier, m.days) };
     });
     return [...normal, ...this.activeSpecials().filter((m) => m.cityId === cityId)];
   }
 
-  // 任務で必ず手に入る位相残晶の数（勝ったとき）。日数 × 最低保証の割合（切り上げ）。特異な残滓には使わない（凝相の残滓は specialFeathers）
-  //   勝つと、さらに1日ごとに bonusChance の確率で1個ずつ上乗せ（最大 日数 個）
+  // 任務で必ず手に入る位相残晶の数（勝ったとき）。日数 × 最低保証の割合 × レンズの補正（切り上げ）。特異な残滓には使わない（凝相の残滓は specialFeathers）
+  //   勝つと、さらに1日ごとに bonusChance × レンズの補正 の確率で1個ずつ上乗せ（最大 日数 個）
   missionFeathers(tier, days, special = false) {
     if (special) return 0;
-    const rate = this.config.endgame.feathers.perDay[tier] ?? 0;
+    const rate = (this.config.endgame.feathers.perDay[tier] ?? 0) * (1 + this.lensBonus().feathers);
     return Math.ceil(days * rate - 1e-9);
+  }
+
+  // 1日ごとの位相残晶の上乗せの確率（レンズの補正込み）
+  featherBonusChance() {
+    return Math.min(1, this.config.endgame.feathers.bonusChance * (1 + this.lensBonus().feathers));
   }
 
   // 勝ったときに拾う位相残晶の数（最低保証＋上乗せの抽選）
   rollFeathers(mission) {
     if (!mission.feathers) return 0;
-    if (mission.special) return mission.feathers; // 凝相の残滓：現れたときに決まった数（上乗せはない）
+    if (mission.special) return mission.feathers; // 凝相の残滓：現れたときに決まった数（レンズの補正込み。上乗せはない）
     const rng = createRng(`${this.seed}|feathers|${mission.key}|${this.date}`);
+    const chance = this.featherBonusChance();
     let n = mission.feathers;
-    for (let d = 0; d < mission.days; d++) if (rng.next() < this.config.endgame.feathers.bonusChance) n++;
+    for (let d = 0; d < mission.days; d++) if (rng.next() < chance) n++;
     return n;
   }
 
@@ -839,7 +896,7 @@ export class Game {
     return v;
   }
 
-  // 特異な残滓で手に入る位相残晶の数（種類に feathers の範囲があるものだけ。凝相の残滓）
+  // 特異な残滓で手に入る位相残晶の数（種類に feathers の範囲があるものだけ。凝相の残滓）。レンズの補正は activeSpecials で掛ける
   specialFeathers(key, kind) {
     const f = this.config.specials.kinds[kind]?.feathers;
     return f ? createRng(`${key}|feathers`).int(f[0], f[1]) : 0;
@@ -862,16 +919,35 @@ export class Game {
         return {
           ...m,
           tierName: d.name,
-          rewardLocal: Math.round(m.rewardLocal * (d.rewardMult ?? 1)),
+          rewardLocal: this.lensReward(Math.round(m.rewardLocal * (d.rewardMult ?? 1))),
           key: s.key,
           scouted: this.scouted.includes(s.key),
-          feathers: kind === known.kind ? known.feathers : 0, // 位相残晶は凝相の残滓でだけ手に入る（決まった数）
+          // 位相残晶は凝相の残滓でだけ手に入る（決まった数 × レンズの補正）
+          feathers: kind === known.kind && known.feathers ? Math.round(known.feathers * (1 + this.lensBonus().feathers)) : 0,
           special: { kind, weapon: d.weapon ? s.weapon : null, xp: d.xp ?? 0, expires: s.expires, appear: s.appear, desc: d.desc },
         };
       });
   }
 
-  // ── 東京：観測レンズの強化（特異な残滓の種類が増える） ──
+  // ── 東京：観測レンズの強化（特異な残滓の種類が増え、探索の売却額と位相残晶が増える） ──
+
+  // 偵察で聞く噂の確からしさ（観測レンズで上がる）
+  scoutAccuracy(level = this.lensLevel) {
+    const l = level ? this.config.lens[level - 1] : null;
+    return l?.scoutAccuracy ?? this.config.hints.scout.accuracy;
+  }
+
+  // いまのレンズの補正 { reward: 売却額の上乗せ, feathers: 位相残晶の上乗せ }（0.1 = +10%）
+  lensBonus(level = this.lensLevel) {
+    const l = level ? this.config.lens[level - 1] : null;
+    return { reward: l?.rewardBonus ?? 0, feathers: l?.featherBonus ?? 0 };
+  }
+
+  // 売却額（現地通貨）にレンズの補正を掛ける
+  lensReward(local) {
+    return Math.round(local * (1 + this.lensBonus().reward));
+  }
+
   nextLens() {
     return this.config.lens[this.lensLevel] ?? null;
   }
@@ -896,8 +972,9 @@ export class Game {
     this.track("lens.upgrade");
     this.track("spend.lens", next.yen);
     const opened = Object.values(this.config.specials.kinds).filter((d) => d.lens === this.lensLevel).map((d) => d.name);
-    this.addLog(`観測レンズを強化した（${next.name}）${opened.length ? `。「${opened.join("・")}」を観測できるようになった` : ""}`);
-    return { ok: true, lens: next, opened };
+    const b = this.lensBonus();
+    this.addLog(`観測レンズを強化した（${next.name}。売却額+${Math.round(b.reward * 100)}%・位相残晶+${Math.round(b.feathers * 100)}%）${opened.length ? `。「${opened.join("・")}」を観測できるようになった` : ""}`);
+    return { ok: true, lens: next, opened, bonus: b };
   }
 
   findMission(key) {
@@ -1006,7 +1083,7 @@ export class Game {
     const passed = this.passDays(days, { training: true });
     this.scouted.push(key);
     // 現地の噂：その都市の通貨の、この先の向き
-    const hint = scoutHint(this.market, m.currency, this.date, this.seed, this.config);
+    const hint = scoutHint(this.market, m.currency, this.date, this.seed, this.config, { ...this.config.hints.scout, accuracy: this.scoutAccuracy() });
     if (hint) {
       this.hints.push(hint);
       this.track("hint.scout");
@@ -1269,12 +1346,21 @@ export class Game {
     return { ok: true, stage: st };
   }
 
-  // ── 東京：情報を集める（日銀・財務省筋の噂）。週に1度、1日かかる。円全体の、この先の向きの噂 ──
+  // ── 東京：情報を集める（日銀・財務省筋の噂）。1日かかる。4通貨のうち、この先一番大きく動く通貨とその向きの噂 ──
+  //   一度集めると、cooldownDays 日たつまで新しい噂は入らない
+
+  // 次の噂が入るまでの日数（0なら集められる）
+  intelWaitDays() {
+    if (!this.lastIntel) return 0;
+    return Math.max(0, (this.config.hints.tokyo.cooldownDays ?? 7) - daysBetween(this.lastIntel, this.date));
+  }
+
   canGatherIntel() {
     const busy = this.busyReason() ?? this.timeBlock();
     if (busy) return busy;
     if (this.cityId !== this.homeId) return `情報は${this.cityName(this.homeId)}でしか集められません`;
-    if (this.intelWeeks.includes(this.hireWeek())) return `今週の情報はもう集めた（あと${this.daysUntilRefresh()}日で新しい噂が入る）`;
+    const wait = this.intelWaitDays();
+    if (wait > 0) return `新しい噂が入るのは${wait}日後`;
     if (this.daysLeft < 1) return "ドゥームズデイです";
     return null;
   }
@@ -1283,12 +1369,12 @@ export class Game {
     const why = this.canGatherIntel();
     if (why) return fail(why);
     const h = this.config.hints.tokyo;
-    this.intelWeeks.push(this.hireWeek());
+    this.lastIntel = this.date;
     this.track("intel.count");
     const date = this.date;
     const passed = this.passDays(h.takeDays, { training: true });
     const found = [];
-    const hint = yenHint(this.market, date, this.seed, this.config, h);
+    const hint = tokyoHint(this.market, date, this.seed, this.config, h);
     if (hint) {
       hint.source = this.cityName(this.homeId);
       this.hints.push(hint);
@@ -1299,7 +1385,7 @@ export class Game {
     return { ok: true, hints: found, ...passed };
   }
 
-  // ── 研究財団の株式 ──
+  // ── 研究所の株式 ──
 
   // 期間の補正：周回の期間に相場が大きく動いたほど株価を上げる（稼ぎやすい期間ほど資金ルートを難しくする）
   computePeriodFactor() {
@@ -1312,12 +1398,18 @@ export class Game {
     return 1 + this.config.endgame.shares.trendFactor * maxMove;
   }
 
-  // 保有比率 h% のときに、次の1%を買う値段（節目を越えると上がる）
+  // 保有比率 h% のときに、次の1%を買う値段（節目を越えると上がる。日がたつほど上がる）
   sharePriceAt(h) {
     const sh = this.config.endgame.shares;
     let mult = 1;
     for (const s of sh.steps ?? []) if (h >= s.at) mult *= s.mult;
-    return sh.firstPrice * mult * this.periodFactor;
+    return sh.firstPrice * mult * this.periodFactor * this.shareTimeFactor();
+  }
+
+  // 時期の補正：研究が進むほど株価が上がる（周回の始めは1、期日には 1 ＋ priceGrowth）
+  shareTimeFactor(date = this.date) {
+    const p = Math.min(1, Math.max(0, daysBetween(this.startDate, date) / this.config.run.lengthDays));
+    return 1 + (this.config.endgame.shares.priceGrowth ?? 0) * p;
   }
 
   // 次の値上がりの節目（なければ null）
@@ -1351,7 +1443,7 @@ export class Game {
     this.track("spend.shares", cost);
     const sh = this.config.endgame.shares;
     const before0 = this.shares - pct;
-    this.addLog(`財団の株式を${pct}%買い増した（${yen(cost)}）。保有比率 ${this.shares.toFixed(1)}%`);
+    this.addLog(`${this.config.endgame.shares.shortName}の株式を${pct}%買い増した（${yen(cost)}）。保有比率 ${this.shares.toFixed(1)}%`);
     const events = [];
     for (const s of sh.steps ?? []) {
       if (before0 < s.at && this.shares >= s.at && this.shares < sh.majority) {
@@ -1359,10 +1451,21 @@ export class Game {
         this.addLog(`★${s.text}（以後の値段 ×${s.mult}）`);
       }
     }
+    // 株主優待の銃：その段階に届いたとき、一度だけ現物で届く（研究所の試作品。Lvはいまの敵の基準Lv）
+    for (const p of sh.perks ?? []) {
+      if (!p.weapon || before0 >= p.at || this.shares < p.at || this.perkWeapons?.includes(p.weapon)) continue;
+      (this.perkWeapons ??= []).push(p.weapon);
+      this.spareWeapons[p.weapon] = (this.spareWeapons[p.weapon] ?? 0) + 1;
+      this.weaponLevels[p.weapon] = Math.max(this.weaponLevel(p.weapon), this.baseEnemyLevel());
+      this.track(`gift.weapon.${p.weapon}`);
+      const name = this.config.weapons[p.weapon].name;
+      events.push({ type: "gift", weapon: p.weapon, title: "株主優待", text: `株主優待として、試作品の「${name}」（Lv${this.weaponLevel(p.weapon)}）が届いた` });
+      this.addLog(`★株主優待として「${name}」が届いた（Lv${this.weaponLevel(p.weapon)}）`);
+    }
     if (this.shares >= sh.majority) {
       this.over = { reason: "clear", route: "funds" };
       this.stats["clear.day"] = daysBetween(this.startDate, this.date);
-      this.addLog(`財団の株式の過半数を握った。「${this.config.endgame.shares.research}」は中止された`);
+      this.addLog(`${this.config.endgame.shares.shortName}の株式の過半数を握った。「${this.config.endgame.shares.research}」は中止された`);
     }
     return { ok: true, cost, events };
   }
@@ -1392,7 +1495,7 @@ export class Game {
       this.track(`gift.${k}`, n);
       parts.push(`${k === "medkit" ? this.config.supplies.medkit.name : this.config.ammoTypes[k].name}${n}`);
     }
-    this.addLog(`財団から配当 ${yen(cash)}${parts.length ? `と株主優待（${parts.join("・")}）` : ""}を受け取った`);
+    this.addLog(`${this.config.endgame.shares.shortName}から配当 ${yen(cash)}${parts.length ? `と株主優待（${parts.join("・")}）` : ""}を受け取った`);
   }
 
   // ブラックスワンのレベル（株式を買うほど下がる）
@@ -1434,6 +1537,46 @@ export class Game {
     }
   }
 
+  // 決戦に持っていく弾の目安（決戦タブに出す）
+  //   勝ち負けは出さない：仲間は傷つかないものとして（体力は無限）、いまの部隊（負傷中の仲間も含む全員）・銃のLv・
+  //   ブラックスワンのLv・対抗装置で、3つの形態を倒しきるまで guideRuns 回戦わせ、guideCover の割合の回が足りる量を、100発単位で切り上げる
+  //   guideSeconds 秒で倒しきれない回が多いとき、またはどれかの弾が guideMax 発を超えるときは、推測不能（unknown: true）
+  //   戻り値：{ normal, ap, shot, incendiary, resonance, unknown }。同じ状態なら計算し直さない
+  finalAmmoGuide({ runs = this.config.endgame.guideRuns ?? 30, cover = this.config.endgame.guideCover ?? 0.8, policy = "smart" } = {}) {
+    const key = JSON.stringify([this.date, this.members.map((m) => [m.id, m.level, m.weapon, m.row]), this.weaponLevels, this.bossLevel(), this.deviceStage, policy, runs, cover]);
+    if (this._guide?.key === key) return this._guide.value;
+    const eg = this.config.endgame;
+    const ammoKeys = Object.keys(this.config.ammoTypes);
+    const plenty = Object.fromEntries(ammoKeys.map((k) => [k, 1e7]));
+    const setup = {
+      ...this.battleSetup({ policy, retreatLine: 0, ammo: plenty, medkits: 0 }),
+      maxSeconds: eg.guideSeconds ?? 300,
+      enemyLevel: this.bossLevel(),
+      enemyScale: this.config.endgame.bossScale ?? 1,
+      bossRules: this.bossRules(),
+      stageRecovery: eg.stageRecovery,
+      invulnerable: true,
+    };
+    setup.allies = this.members.map((m) => this.allySpec(m));
+    const stages = eg.bossForms.map((f) => f.enemies);
+    const used = Object.fromEntries(ammoKeys.map((k) => [k, []]));
+    let timeouts = 0;
+    for (let i = 0; i < runs; i++) {
+      const r = new MissionRun(setup, stages, { seed: `${this.seed}|guide|${i}`, config: this.config }).runAll();
+      if (r.outcome !== "win") timeouts++;
+      for (const k of ammoKeys) used[k].push(r.used[k]);
+    }
+    const q = (xs) => {
+      const s = [...xs].sort((a, b) => a - b);
+      return s[Math.min(s.length - 1, Math.floor(cover * s.length))] ?? 0;
+    };
+    const value = { unknown: timeouts > runs * (1 - cover) };
+    for (const k of ammoKeys) value[k] = Math.ceil(q(used[k]) / 100) * 100;
+    if (ammoKeys.some((k) => value[k] > (eg.guideMax ?? 9900))) value.unknown = true;
+    this._guide = { key, value };
+    return value;
+  }
+
   // 決戦の戦闘を用意する（画面で再生するか、finishFinal で一気に計算する）
   startFinal(options = {}) {
     if (!this.finalPending) return fail("まだ決戦の時ではありません");
@@ -1446,6 +1589,7 @@ export class Game {
       ...this.battleSetup({ policy: options.policy ?? "smart", retreatLine: 0 }),
       maxSeconds: this.config.battle.bossMaxSeconds,
       enemyLevel: this.bossLevel(),
+      enemyScale: this.config.endgame.bossScale ?? 1,
       bossRules: this.bossRules(),
       stageRecovery: this.config.endgame.stageRecovery,
     };
@@ -1508,6 +1652,7 @@ export class Game {
       deviceStage: this.deviceStage,
       shares: this.shares,
       feathers: this.feathers,
+      lensLevel: this.lensLevel,
       periodFactor: this.periodFactor,
       stats: { ...this.stats },
     };

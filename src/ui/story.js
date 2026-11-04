@@ -12,6 +12,7 @@ import { CONFIG } from "../config.js";
 import { SPEAKERS, STILLS } from "../data/story.js";
 import { createRng } from "../core/rng.js";
 import { addDays, daysBetween } from "../core/calendar.js";
+import { isLoaded, ensureLoaded } from "./assets.js";
 
 const AUTO_KEY = "blackswan.story.auto";
 
@@ -50,6 +51,7 @@ export function storyVars(game, config = CONFIG) {
     losscut: `${Math.round(config.fx.losscutRatio * 100)}%`,
     foundation: config.endgame.shares.foundation,
     research: config.endgame.shares.research,
+    institute: config.endgame.shares.shortName,
     homeCity: game.cityName(game.homeId),
   };
 }
@@ -175,10 +177,14 @@ export function playStory(steps, game, opts = {}) {
       <img class="story-face" alt="" hidden>
       <div class="story-box" hidden>
         <div class="story-head"><span class="story-name"></span>
-          <span class="story-ctl"><button type="button" data-story="auto">オート</button><button type="button" data-story="skip">スキップ</button></span></div>
+          <span class="story-ctl"><button type="button" data-story="auto">オート</button><button type="button" data-story="skip">スキップ</button><button type="button" data-story="log">ログ</button></span></div>
         <div class="story-text"></div>
         <div class="story-next">▼</div>
       </div>
+    </div>
+    <div class="story-log" hidden>
+      <div class="story-log-head"><span>ログ</span><button type="button" data-story="closeLog">閉じる</button></div>
+      <div class="story-log-body"></div>
     </div>`;
   document.body.appendChild(root);
   const el = {
@@ -192,6 +198,8 @@ export function playStory(steps, game, opts = {}) {
     text: root.querySelector(".story-text"),
     next: root.querySelector(".story-next"),
     auto: root.querySelector('[data-story="auto"]'),
+    log: root.querySelector(".story-log"),
+    logBody: root.querySelector(".story-log-body"),
   };
   root.style.setProperty("--fade", `${cfg.fadeMs}ms`);
   // 台詞の箱は、下のタブより上に出す（タブの高さを測る。タブのない画面では0）
@@ -211,7 +219,16 @@ export function playStory(steps, game, opts = {}) {
     effect: null,
     auto: readAuto(),
     opts,
+    history: [], // ログ：これまでに出した台詞 { who, name, html }
+    logOpen: false,
   };
+  const lineEntry = (s) => {
+    const sp = SPEAKERS[s.who] ?? {};
+    const tokens = tokenize(fillText(s.text, vars));
+    return { who: s.who, name: sp.name ? fillText(sp.name, vars) : "", html: tokensHtml(tokens, tokens.length) };
+  };
+  // 途中から再開したときも、それまでの台詞をログに入れておく
+  for (const s of steps.slice(0, st.i)) if (isLine(s)) st.history.push(lineEntry(s));
   current = { root, st, el, onKey: null };
 
   // 再開：それまでの背景・タブに合わせる
@@ -268,6 +285,7 @@ export function playStory(steps, game, opts = {}) {
     } else el.face.hidden = true;
     st.tokens = tokenize(fillText(s.text, vars));
     st.chunks = chunkTokens(st.tokens);
+    st.history.push(lineEntry(s));
     st.shown = 0;
     el.next.classList.remove("on");
     el.text.innerHTML = "";
@@ -302,8 +320,28 @@ export function playStory(steps, game, opts = {}) {
     finish(false);
   };
 
+  // ログ：すべて止めて（文字送り・オート）、これまでの台詞を出す。閉じると続きから
+  const openLog = () => {
+    if (st.logOpen) return;
+    st.logOpen = true;
+    st.resumeTyping = !!st.typing;
+    clearTimers();
+    el.logBody.innerHTML = st.history
+      .map((h) => `<div class="log-line who-${h.who}">${h.name ? `<div class="log-name">${h.name}</div>` : ""}<div class="log-text">${h.html}</div></div>`)
+      .join("") || '<p class="muted small">まだ何もない。</p>';
+    el.log.hidden = false;
+    el.logBody.scrollTop = el.logBody.scrollHeight; // 新しいものが下
+  };
+  const closeLog = () => {
+    if (!st.logOpen) return;
+    st.logOpen = false;
+    el.log.hidden = true;
+    if (st.resumeTyping && st.shown < st.tokens.length) typeNext();
+    else if (!st.effect) scheduleAuto();
+  };
+
   const advance = () => {
-    if (!current) return;
+    if (!current || st.logOpen) return;
     if (st.effect) return st.effect.skip(); // 演出中：最後まで飛ばす
     if (st.typing) {
       // 出している途中：その文を全部出す
@@ -318,6 +356,9 @@ export function playStory(steps, game, opts = {}) {
   root.addEventListener("click", (e) => {
     e.stopPropagation();
     const b = e.target.closest("[data-story]");
+    if (b?.dataset.story === "log") return openLog();
+    if (b?.dataset.story === "closeLog") return closeLog();
+    if (st.logOpen) return; // ログを見ている間は、押しても進まない（読むためのスクロールはできる）
     if (b?.dataset.story === "skip") return finish(true);
     if (b?.dataset.story === "auto") {
       st.auto = !st.auto;
@@ -330,6 +371,10 @@ export function playStory(steps, game, opts = {}) {
     advance();
   });
   current.onKey = (e) => {
+    if (st.logOpen) {
+      if (e.key === "Escape") closeLog();
+      return;
+    }
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       advance();
@@ -358,10 +403,18 @@ function setBg(el, bg, instant = false) {
   const root = el.black.parentElement;
   root.classList.toggle("instant", instant);
   root.classList.toggle("on-game", bg === "game");
+  el.want = bg;
   if (STILLS[bg]) {
-    if (!el.still.src.endsWith(STILLS[bg])) el.still.src = STILLS[bg];
-    el.still.classList.add("on");
+    const url = STILLS[bg];
     el.black.classList.add("on");
+    const show = () => {
+      if (el.want !== bg) return; // 読み込んでいる間に、次の背景に変わった
+      if (!el.still.src.endsWith(url)) el.still.src = url;
+      el.still.classList.add("on");
+    };
+    // 先読みが済んでいれば、すぐ切り替わる。まだなら読み込んでから（その間は黒画面）
+    if (isLoaded(url)) show();
+    else ensureLoaded(url).then(show);
   } else {
     el.still.classList.remove("on");
     el.black.classList.toggle("on", bg === "black");

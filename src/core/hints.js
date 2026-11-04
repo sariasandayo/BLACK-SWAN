@@ -3,7 +3,8 @@
 // どちらも相場データ（実際の値動き）から作るので、データとずれない。
 //   記憶の断片：周回の期間中に起きる実際の出来事を、一定の確率で思い出す（思い出したものは正確。時期は旬まで）。
 //               相場への影響は、出来事の前日から effectDays 日後までの実際の変化から文章にする
-//   偵察の噂：その都市の通貨が、この先 days 日で上がるか下がるか。accuracy の確率で正しい
+//   偵察の噂：その都市の通貨が、この先 days 日で上がるか下がるか。accuracy の確率で正しい（観測レンズで上がる）
+//   東京の噂：4通貨のうち、この先 days 日で一番大きく動く通貨と、その向き。accuracy の確率で向きが正しい
 // 通貨の名前は config の currencies.name を使う
 
 import { CONFIG } from "../config.js";
@@ -109,7 +110,7 @@ export function memoriesFor(market, start, deadline, config = CONFIG, seed = "")
   return out;
 }
 
-// 偵察の噂：その都市の通貨の、この先 days 日の向き
+// 偵察の噂：その都市の通貨の、この先 days 日の向き（h.accuracy は観測レンズで上がった値を渡せる）
 export function scoutHint(market, ccy, date, seed, config = CONFIG, h = config.hints.scout) {
   const until = addDays(date, h.days);
   if (until > market.lastDate) return null;
@@ -123,12 +124,37 @@ export function scoutHint(market, ccy, date, seed, config = CONFIG, h = config.h
     until,
     up,
     strong,
+    accuracy: h.accuracy,
     text: `${ccyName(ccy, config)}は、${fuzzyWhen(until)}ごろまでに円に対して${strong ? "大きく" : ""}${up ? "上がりそう" : "下がりそう"}だ。`,
   };
 }
 
-// 東京で集める噂：円全体の、この先 days 日の向き（4通貨の変化の平均。accuracy の確率で正しい）
-//   up は「円が上がる（円高）」。どの通貨で取引するかは、プレイヤーが決める
+// 東京で集める噂（日銀・財務省筋）：4通貨のうち、この先 days 日で円に対して一番大きく動く通貨と、その向き
+//   どの通貨かは正しい。向きは accuracy の確率で正しい。strong：動きが strongMove 以上
+export function tokyoHint(market, date, seed, config = CONFIG, h = config.hints.tokyo) {
+  const until = addDays(date, h.days);
+  if (until > market.lastDate) return null;
+  let best = null;
+  for (const c of market.currencies) {
+    const move = Math.log(market.close(c, until) / market.close(c, date));
+    if (!best || Math.abs(move) > Math.abs(best.move)) best = { ccy: c, move };
+  }
+  const right = createRng(`${seed}|tokyo|${date}`).next() < h.accuracy;
+  const up = (best.move > 0) === right;
+  const strong = Math.abs(best.move) > (h.strongMove ?? 0.02);
+  return {
+    ccy: best.ccy,
+    from: date,
+    until,
+    up,
+    strong,
+    accuracy: h.accuracy,
+    text: `${fuzzyWhen(until)}ごろまでに、一番大きく動くのは${ccyName(best.ccy, config)}。円に対して${strong ? "大きく" : ""}${up ? "上がりそう" : "下がりそう"}だ。`,
+  };
+}
+
+// （以前の東京の噂）円全体の、この先 days 日の向き（4通貨の変化の平均。accuracy の確率で正しい）
+//   up は「円が上がる（円高）」。いまは使っていない（tokyoHint に置き換えた）
 export function yenHint(market, date, seed, config = CONFIG, h = config.hints.tokyo) {
   const until = addDays(date, h.days);
   if (until > market.lastDate) return null;
