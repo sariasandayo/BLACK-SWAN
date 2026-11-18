@@ -9,7 +9,7 @@
 //   この sw.js が変わったことをブラウザが見つけると、古い保存を消して、新しく保存し直す
 // ・開発用ページ（tools/）と、ほかのサイトのファイルは保存しない
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 const PREFIX = "blackswan-v";
 const CACHE = PREFIX + VERSION;
 
