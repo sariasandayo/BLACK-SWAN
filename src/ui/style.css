@@ -162,7 +162,8 @@ button.tip { display: inline-flex; align-items: center; justify-content: center;
 .story { position: fixed; inset: 0; z-index: 100; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; }
 .story-bg { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity var(--fade, .5s) ease; pointer-events: none; }
 .story-bg[data-layer="black"] { background: #000; }
-.story-still { object-fit: contain; background: #000; }
+.story-still { object-fit: contain; background: #000; height: calc(100% - var(--still-bottom, 0px)); transition: opacity var(--fade, .5s) ease, height .2s ease; }
+/* ↑ スチルは台詞の箱より上に収める（--still-bottom は story.js が箱の高さを測って入れる）。後ろの黒画面が箱の下まで覆う */
 .story-bg.on { opacity: 1; }
 .story.instant .story-bg { transition: none; }
 .story.on-game { background: rgba(0, 0, 0, .25); } /* ゲーム画面：後ろを少し暗くして見せる（操作はできない） */

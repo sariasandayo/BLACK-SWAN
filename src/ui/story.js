@@ -204,6 +204,18 @@ export function playStory(steps, game, opts = {}) {
   root.style.setProperty("--fade", `${cfg.fadeMs}ms`);
   // 台詞の箱は、下のタブより上に出す（タブの高さを測る。タブのない画面では0）
   const fitTabs = () => root.style.setProperty("--tabs-h", `${document.querySelector("#app .tabs")?.offsetHeight ?? 0}px`);
+  // スチルは、台詞の箱より上に収める（PCの横長の画面では、スチルが画面の高さいっぱいに出て、下のほうが箱に隠れるため）
+  //   箱の上端から下の高さを測り、スチルの下側をその分だけ空ける。文の長さで箱が伸び縮みしても絵が動きすぎないよう、
+  //   その場面で一番高かったときの値を使う（画面の大きさが変わったら測り直す）
+  let stillReserve = 0;
+  const fitStill = (reset = false) => {
+    if (reset) stillReserve = 0;
+    if (el.box.hidden) return;
+    const need = Math.max(0, Math.ceil(window.innerHeight - el.box.getBoundingClientRect().top));
+    if (need <= stillReserve) return;
+    stillReserve = need;
+    root.style.setProperty("--still-bottom", `${stillReserve}px`);
+  };
   const onTab = (tab) => {
     opts.onTab?.(tab);
     fitTabs();
@@ -294,6 +306,7 @@ export function playStory(steps, game, opts = {}) {
       st.shown = st.tokens.length - 1;
       typeNext();
     }
+    fitStill(); // まだ出していない文字も場所を取っているので、この時点で箱の高さは決まっている
   };
 
   // 次の台詞まで手順を進める（背景・タブ・演出は、ここで順に実行する）
@@ -381,8 +394,11 @@ export function playStory(steps, game, opts = {}) {
     }
   };
   document.addEventListener("keydown", current.onKey);
-  current.onResize = fitTabs;
-  window.addEventListener("resize", fitTabs);
+  current.onResize = () => {
+    fitTabs();
+    fitStill(true);
+  };
+  window.addEventListener("resize", current.onResize);
 
   // 再開位置が台詞なら、その台詞から（手順を1つ戻して run で表示する）
   run();
